@@ -37,6 +37,9 @@ func half() -> Vector2:
 ## fewer, each layer's edge shows as a step once the HDR blur is gone.
 const HALO_LAYERS := 12
 const HALO_REACH := 38.0
+## Halos never go fully dark: at rest every emitter keeps this much of its
+## glow, so the piece stays ethereal at idle and load brightens it from here.
+const HALO_FLOOR := 0.15
 var _halo: Array = _build_halo()
 
 
@@ -51,29 +54,33 @@ static func _build_halo() -> Array:
 
 
 func halo_arc(center: Vector2, radius: float, start: float, end: float, points: int, color: Color, width: float, heat: float) -> void:
-	if not Palette.halo or heat <= 0.02:
+	if not Palette.halo:
 		return
+	heat = maxf(heat, HALO_FLOOR)
 	for layer in _halo:
 		draw_arc(center, radius, start, end, points, Color(color.r, color.g, color.b, layer[1] * heat), width + layer[0], true)
 
 
 func halo_line(from: Vector2, to: Vector2, color: Color, width: float, heat: float) -> void:
-	if not Palette.halo or heat <= 0.02:
+	if not Palette.halo:
 		return
+	heat = maxf(heat, HALO_FLOOR)
 	for layer in _halo:
 		draw_line(from, to, Color(color.r, color.g, color.b, layer[1] * heat), width + layer[0], true)
 
 
 func halo_circle(center: Vector2, radius: float, color: Color, heat: float) -> void:
-	if not Palette.halo or heat <= 0.02:
+	if not Palette.halo:
 		return
+	heat = maxf(heat, HALO_FLOOR)
 	for layer in _halo:
 		draw_circle(center, radius + layer[0] * 0.5, Color(color.r, color.g, color.b, layer[1] * heat))
 
 
 func halo_polyline(pts: PackedVector2Array, color: Color, width: float, heat: float) -> void:
-	if not Palette.halo or heat <= 0.02 or pts.size() < 2:
+	if not Palette.halo or pts.size() < 2:
 		return
+	heat = maxf(heat, HALO_FLOOR)
 	for layer in _halo:
 		draw_polyline(pts, Color(color.r, color.g, color.b, layer[1] * heat), width + layer[0], true)
 
@@ -106,8 +113,9 @@ static func _radial_texture() -> GradientTexture2D:
 
 
 func halo_glow(center: Vector2, radius: float, color: Color, heat: float) -> void:
-	if not Palette.halo or heat <= 0.02:
+	if not Palette.halo:
 		return
+	heat = maxf(heat, HALO_FLOOR)
 	var rect := Rect2(center - Vector2.ONE * radius, Vector2.ONE * radius * 2.0)
 	draw_texture_rect(_radial_texture(), rect, false, Color(color.r, color.g, color.b, 0.6 * heat))
 

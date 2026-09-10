@@ -50,9 +50,10 @@ func _draw() -> void:
 		var d := Vector2.from_angle(a)
 		draw_line(d * (core_radius + 16.0), d * (inner_radius - 36.0), Palette.dim(frame, 0.22), 1.0, true)
 
-	# The core: the only filled shape. Below 1.0 it is a dim gold ember;
-	# past a quarter load it starts to emit; at full load it is the
-	# brightest thing on screen.
+	# The core: the only filled shapes. A triangle split Sierpinski-wise
+	# once: three corner triangles around an empty middle one. Below 1.0
+	# it is a dim gold ember; past a quarter load it starts to emit; at
+	# full load it is the brightest thing on screen.
 	var total := s.cpu_total
 	var r := core_radius * (1.0 + 0.07 * breath)
 	var pts := PackedVector2Array()
@@ -60,7 +61,12 @@ func _draw() -> void:
 		pts.append(Vector2.from_angle(-PI * 0.5 + i * TAU / 3.0) * r)
 	var k := lerpf(0.6, 3.2, total) * (0.85 + 0.3 * breath)
 	halo_glow(Vector2.ZERO, core_radius * 3.4, core, clampf((total - 0.15) / 0.85, 0.0, 1.0) * (0.85 + 0.3 * breath))
-	draw_colored_polygon(pts, Color(core.r * k, core.g * k, core.b * k, 1.0))
+	var fill := Color(core.r * k, core.g * k, core.b * k, 1.0)
+	for i in 3:
+		var a := pts[i]
+		var b := pts[(i + 1) % 3]
+		var c := pts[(i + 2) % 3]
+		draw_colored_polygon(PackedVector2Array([a, (a + b) * 0.5, (a + c) * 0.5]), fill)
 	draw_arc(Vector2.ZERO, core_radius + 10.0, 0.0, TAU, 96, Palette.dim(core, 0.2 + 0.5 * total), 1.0, true)
 
 	draw_brackets(Palette.dim(frame, 0.85), 22.0)
