@@ -347,8 +347,14 @@ screen blend, threshold near 1.0, intensity starting around 0.6. Glow in
 channels exceed 1.0; everything else stays below and does not bloom. That
 single rule is what keeps it effulgent instead of blurry.
 
-`Engine.max_fps = 30`. Drop to 5 on `NOTIFICATION_APPLICATION_FOCUS_OUT`
-when the window is hidden; this thing runs all day.
+`Engine.max_fps = 30` in a window, 15 over the desktop or docked in the
+cockpit (30 again while being dragged), 3 minimized; this thing runs all
+day. Measured 2026-09-09 while docked at 30 fps: 40% of an M2 core, about
+half of it GDScript drawing the twelve-layer halo arcs (`draw_arc` builds
+an antialiased polyline on the CPU every call) and the rest submitting
+frames. Halving the rate halves both. If the docked cost still matters,
+the next lever is drawing halos as a ring shader on one quad instead of
+twelve polylines, not fewer layers.
 
 ## The references, read as a vocabulary
 

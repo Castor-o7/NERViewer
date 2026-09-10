@@ -10,7 +10,7 @@ extends Node2D
 ## in desktop mode, Q or Escape quits. In desktop mode, drag anywhere
 ## to move the window. Mode, palette and window position persist.
 ##
-## Docked: another app (the Yggdrasil cockpit, MagitechDesk) can write
+## Docked: another app (the Yggdrasil System cockpit) can write
 ## user://dock.cfg with a screen rect; while that file exists the piece is
 ## the sigil alone, filling that rect, borderless and on top. When the
 ## file goes away the piece returns to its own prefs. Nothing about
@@ -29,6 +29,11 @@ const MINIMAL_SCALE := 1.25
 
 const PREFS := "user://prefs.cfg"
 const FPS_AWAKE := 30
+## Over the desktop or docked in the cockpit the piece runs all day, and
+## nothing on it moves faster than the breath and the samples arriving:
+## half the frames, half the cost (measured 2026-09-09: 30 fps docked was
+## 40% of an M2 core, most of it drawing halo arcs and submitting frames).
+const FPS_REST := 15
 const FPS_MINIMIZED := 3
 const DESIGN := Vector2i(1440, 900)
 const DOCK_FILE := "user://dock.cfg"
@@ -185,9 +190,11 @@ func _process(dt: float) -> void:
 	# Minimized, nobody is looking: a few frames a second keep the
 	# history current and cost almost nothing.
 	var minimized := get_window().mode == Window.MODE_MINIMIZED
-	var want := FPS_MINIMIZED if minimized else FPS_AWAKE
+	var resting := (docked or desktop) and not _dragging
+	var want := FPS_MINIMIZED if minimized else (FPS_REST if resting else FPS_AWAKE)
 	if Engine.max_fps != want:
 		Engine.max_fps = want
+		print("fps ", want, " (docked ", docked, ", desktop ", desktop, ")")
 
 
 ## Docking. The file is polled once a second; its modified time is the
