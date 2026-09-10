@@ -5,21 +5,13 @@ extends Node2D
 ## captions are the same on every panel, the way every reference screen
 ## is captioned the same way.
 
-## The heartbeat: each sample lifts `_pulse` toward 1 and it settles back.
-## It used to snap to 1 and fall in 0.6 s, which at 15 fps read as a
-## blink (Josh, 2026-09-10). Now it rises from wherever it is over
-## PULSE_RISE and eases down over PULSE_DECAY; with samples every 0.5 s
-## it never quite reaches rest, so the ring throbs rather than flashes.
-const PULSE_RISE := 0.15
-const PULSE_DECAY := 1.0
+const PULSE_DECAY := 0.6
 const SMALL := 10
 
 @export var size := Vector2(300.0, 200.0)
 
 var _font: Font = Palette.FONT
 var _pulse := 0.0
-var _pulse_from := 0.0   # where the current rise started
-var _pulse_t := 10.0     # seconds since the last sample
 
 
 func _ready() -> void:
@@ -28,16 +20,11 @@ func _ready() -> void:
 
 
 func _on_sample(_s: StatSample) -> void:
-	_pulse_from = _pulse
-	_pulse_t = 0.0
+	_pulse = 1.0
 
 
 func _process(dt: float) -> void:
-	_pulse_t += dt
-	if _pulse_t < PULSE_RISE:
-		_pulse = lerpf(_pulse_from, 1.0, smoothstep(0.0, 1.0, _pulse_t / PULSE_RISE))
-	else:
-		_pulse = 1.0 - smoothstep(0.0, 1.0, clampf((_pulse_t - PULSE_RISE) / PULSE_DECAY, 0.0, 1.0))
+	_pulse = maxf(_pulse - dt / PULSE_DECAY, 0.0)
 	queue_redraw()
 
 
