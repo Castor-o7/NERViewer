@@ -35,8 +35,13 @@ func _draw() -> void:
 	draw_arc(Vector2.ZERO, inner_radius, 0.0, TAU, 160, guide, 1.0, true)
 	_draw_dashed_ring((outer_radius + inner_radius) * 0.5, 48, Palette.dim(frame, 0.12 + 0.1 * breath), _drift)
 	_draw_dashed_ring(inner_radius - 30.0, 24, Palette.dim(frame, 0.12 + 0.1 * breath), -_drift * 1.5)
-	# The scale ring pulses each time a sample arrives: the heartbeat.
-	_draw_scale_ring(outer_radius + 26.0, Palette.dim(frame, 0.22 + 0.4 * _pulse))
+	# The scale ring breathes. Dark at the bottom of the breath; at the top,
+	# in light rather than frame color and fully opaque, about twice as
+	# bright as the old heartbeat's peak. One rise and fall per breath
+	# period (10 s in Yggdrasil). Replaced the per-sample heartbeat on
+	# 2026-09-10 at Josh's request: a beat is discrete, a breath flows.
+	var swell := smoothstep(0.0, 1.0, breath)
+	_draw_scale_ring(outer_radius + 26.0, Palette.dim(frame.lerp(light, 0.6 * swell), lerpf(0.04, 1.0, swell)))
 
 	var n := s.cpu_cores.size()
 	var eff := clampi(s.cpu_eff_cores, 0, n)
@@ -90,7 +95,7 @@ func _draw_group(vals: PackedFloat32Array, radius: float, frame: Color, light: C
 		var start := -PI * 0.5 + i * slice + _gap * 0.5
 		var v := clampf(vals[i], 0.0, 1.0)
 		var d := Vector2.from_angle(start)
-		draw_line(d * (radius - 5.0), d * (radius + 5.0), Palette.dim(frame, 0.45 + 0.5 * _pulse), 1.0, true)
+		draw_line(d * (radius - 5.0), d * (radius + 5.0), Palette.dim(frame, 0.4 + 0.2 * Palette.breath()), 1.0, true)
 		# Never shorter than a dot, so an idle core still exists.
 		var end := start + maxf(span * v, 0.012)
 		var tint := frame.lerp(light, v * 0.85)

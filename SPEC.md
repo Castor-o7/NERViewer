@@ -383,7 +383,13 @@ Common to every screen and therefore rules, not choices:
 - **Annotation.** Small uppercase labels with numeric readouts beside each
   glyph, dimmer than the glyph. They are texture as much as information.
 - **Tempo.** Rebuild screens are nearly still. Motion is data arriving,
-  plus one slow breath. Nothing decorative moves.
+  plus one slow breath. Nothing decorative moves. Decided 2026-09-10:
+  "data arriving" is the geometry changing, never a pulse. The
+  per-sample heartbeat on the scale ring (a snap, then a swell) was
+  removed; two beats a second is discrete and sharp and read as anxiety,
+  not zen. The scale ring now breathes on `Palette.breath()` from near
+  dark to fully lit, and the slice and gauge ticks swing a little on the
+  same breath.
 
 ## Visual mapping — first hypotheses
 

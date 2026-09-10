@@ -29,7 +29,7 @@ func _draw() -> void:
 		var a := start + span * i / 20.0
 		var d := Vector2.from_angle(a)
 		var len := 8.0 if i % 5 == 0 else 3.5
-		draw_line(d * (r + 5.0), d * (r + 5.0 + len), Palette.dim(frame, 0.35 + 0.3 * _pulse), 1.0, true)
+		draw_line(d * (r + 5.0), d * (r + 5.0 + len), Palette.dim(frame, 0.35 + 0.15 * Palette.breath()), 1.0, true)
 
 	# Compressed: a dim band inside the track.
 	if comp_f > 0.002:
