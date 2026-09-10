@@ -28,12 +28,9 @@ const MINIMAL_SCALE := 1.25
 @onready var environment: WorldEnvironment = $Environment
 
 const PREFS := "user://prefs.cfg"
+## 30 is the floor. A 15 fps rest over the desktop was tried on 2026-09-10
+## and read as harsh; the rate is not a lever for cost.
 const FPS_AWAKE := 30
-## Over the desktop or docked in the cockpit the piece runs all day, and
-## nothing on it moves faster than the breath and the samples arriving:
-## half the frames, half the cost (measured 2026-09-09: 30 fps docked was
-## 40% of an M2 core, most of it drawing halo arcs and submitting frames).
-const FPS_REST := 15
 const FPS_MINIMIZED := 3
 const DESIGN := Vector2i(1440, 900)
 const DOCK_FILE := "user://dock.cfg"
@@ -193,11 +190,9 @@ func _process(dt: float) -> void:
 	# Minimized, nobody is looking: a few frames a second keep the
 	# history current and cost almost nothing.
 	var minimized := get_window().mode == Window.MODE_MINIMIZED
-	var resting := (docked or desktop) and not _dragging
-	var want := FPS_MINIMIZED if minimized else (FPS_REST if resting else FPS_AWAKE)
+	var want := FPS_MINIMIZED if minimized else FPS_AWAKE
 	if Engine.max_fps != want:
 		Engine.max_fps = want
-		print("fps ", want, " (docked ", docked, ", desktop ", desktop, ")")
 
 
 ## Docking. The file is polled once a second; its modified time is the
