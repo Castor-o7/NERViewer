@@ -8,6 +8,9 @@ const DRIFT_PERIOD := 180.0  # one revolution of the dashed rings, seconds
 @export var outer_radius := 210.0
 @export var inner_radius := 150.0
 @export var core_radius := 34.0
+## The caption (CPU, TOTAL) and the core-count line. Off while docked in the
+## cockpit: at sigil size they are unreadable and sit on the turning ring.
+@export var captions := true
 
 var _gap := deg_to_rad(7.0)
 var _drift := 0.0
@@ -63,8 +66,9 @@ func _draw() -> void:
 	draw_brackets(Palette.dim(frame, 0.85), 22.0)
 	draw_ruler(half().y - 8.0, Palette.dim(frame, 0.35), 20)
 	draw_ruler(-half().y + 8.0, Palette.dim(frame, 0.35), 20, false)
-	draw_caption("CPU", "TOTAL %04.1f" % (total * 100.0), frame, light)
-	label(Vector2(-half().x + 6.0, -half().y + 29.0), "P %d  E %d" % [s.cpu_perf_cores, s.cpu_eff_cores], Palette.dim(light, 0.55))
+	if captions:
+		draw_caption("CPU", "TOTAL %04.1f" % (total * 100.0), frame, light)
+		label(Vector2(-half().x + 6.0, -half().y + 29.0), "P %d  E %d" % [s.cpu_perf_cores, s.cpu_eff_cores], Palette.dim(light, 0.55))
 	_draw_readouts(s, light)
 
 

@@ -235,6 +235,7 @@ func set_docked(on: bool, rect: Rect2i) -> void:
 		win.content_scale_size = Vector2i(DOCK_DIAMETER, DOCK_DIAMETER)
 		core_ring.position = Vector2(DOCK_DIAMETER, DOCK_DIAMETER) * 0.5
 		core_ring.scale = Vector2.ONE
+		core_ring.captions = false
 		win.size = rect.size
 		win.position = rect.position
 		return
@@ -247,6 +248,7 @@ func set_docked(on: bool, rect: Rect2i) -> void:
 	header.visible = true
 	core_ring.position = _core_home
 	core_ring.scale = Vector2.ONE
+	core_ring.captions = true
 	for g in _outer_glyphs():
 		g.visible = true
 		g.modulate.a = 1.0
