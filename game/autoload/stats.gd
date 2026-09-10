@@ -9,14 +9,20 @@ signal source_changed(name: String)
 const HISTORY_LEN := 360  # 3 minutes at 500 ms
 const HISTORY_KEYS := ["cpu_total", "cpu_perf", "cpu_eff", "mem_used", "net_rx_bps", "net_tx_bps", "load1", "load5", "load15"]
 
-## Per-field easing rate. Higher follows faster. The breath is the tween.
+## The fast readings (CPU, network) move like a needle with inertia: a
+## critically damped spring toward the latest sample, so their velocity
+## is continuous and they never overshoot. OMEGA sets the stiffness: at
+## 4.5 the needle has covered two thirds of a change when the next sample
+## lands half a second later, so it is always gliding, never parked.
+## Decided 2026-09-10: first-order easing at 4/s covered 86% of each step
+## and then all but stopped, a lurch and a hold twice a second, which the
+## heartbeat used to mask and which read as choppy once it was gone.
+const OMEGA := 4.5
+
+## First-order easing for the slow readings. Higher follows faster.
 const RATE := {
-	"cpu_cores": 4.0,
-	"cpu_total": 4.0,
 	"mem_used": 1.0,
 	"mem_pressure": 1.0,
-	"net_rx_bps": 6.0,
-	"net_tx_bps": 6.0,
 	"load": 0.5,
 }
 
@@ -27,6 +33,10 @@ var source: StatSource
 var status := ""
 
 var _has_raw := false
+var _vel_cores := PackedFloat32Array()
+var _vel_total := 0.0
+var _vel_rx := 0.0
+var _vel_tx := 0.0
 
 
 func _ready() -> void:
@@ -95,26 +105,50 @@ func reset_history() -> void:
 ## Snap the smoothed state to the latest raw sample.
 func settle() -> void:
 	smooth = raw.copy()
+	_vel_cores = PackedFloat32Array()
+	_vel_total = 0.0
+	_vel_rx = 0.0
+	_vel_tx = 0.0
 
 
 static func _k(rate: float, dt: float) -> float:
 	return 1.0 - exp(-rate * dt)
 
 
+## One exact step of a critically damped spring: (x, v) toward target over
+## dt. Closed form, so it is stable at any frame rate, 3 fps included.
+static func _spring(x: float, v: float, target: float, dt: float) -> Vector2:
+	var e := exp(-OMEGA * dt)
+	var a := x - target
+	var b := v + OMEGA * a
+	return Vector2(target + (a + b * dt) * e, (b - OMEGA * (a + b * dt)) * e)
+
+
 func _process(dt: float) -> void:
 	if not _has_raw:
 		return
-	var k := _k(RATE["cpu_cores"], dt)
-	if smooth.cpu_cores.size() != raw.cpu_cores.size():
+	var n := raw.cpu_cores.size()
+	if smooth.cpu_cores.size() != n:
 		smooth.cpu_cores = raw.cpu_cores.duplicate()
-	for i in raw.cpu_cores.size():
-		smooth.cpu_cores[i] = lerpf(smooth.cpu_cores[i], raw.cpu_cores[i], k)
-	smooth.cpu_total = lerpf(smooth.cpu_total, raw.cpu_total, _k(RATE["cpu_total"], dt))
+	if _vel_cores.size() != n:
+		_vel_cores.resize(n)
+		_vel_cores.fill(0.0)
+	for i in n:
+		var s := _spring(smooth.cpu_cores[i], _vel_cores[i], raw.cpu_cores[i], dt)
+		smooth.cpu_cores[i] = s.x
+		_vel_cores[i] = s.y
+	var st := _spring(smooth.cpu_total, _vel_total, raw.cpu_total, dt)
+	smooth.cpu_total = st.x
+	_vel_total = st.y
 	smooth.mem_used = int(lerpf(smooth.mem_used, raw.mem_used, _k(RATE["mem_used"], dt)))
 	smooth.mem_compressed = int(lerpf(smooth.mem_compressed, raw.mem_compressed, _k(RATE["mem_used"], dt)))
 	smooth.mem_pressure = lerpf(smooth.mem_pressure, raw.mem_pressure, _k(RATE["mem_pressure"], dt))
-	smooth.net_rx_bps = lerpf(smooth.net_rx_bps, raw.net_rx_bps, _k(RATE["net_rx_bps"], dt))
-	smooth.net_tx_bps = lerpf(smooth.net_tx_bps, raw.net_tx_bps, _k(RATE["net_tx_bps"], dt))
+	var rx := _spring(smooth.net_rx_bps, _vel_rx, raw.net_rx_bps, dt)
+	smooth.net_rx_bps = rx.x
+	_vel_rx = rx.y
+	var tx := _spring(smooth.net_tx_bps, _vel_tx, raw.net_tx_bps, dt)
+	smooth.net_tx_bps = tx.x
+	_vel_tx = tx.y
 	smooth.load = smooth.load.lerp(raw.load, _k(RATE["load"], dt))
 	# Discrete fields are not eased.
 	smooth.t = raw.t

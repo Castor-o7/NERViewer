@@ -318,6 +318,15 @@ Startup: try `HelperStatSource`; on `failed`, fall back to
 `SyntheticStatSource("idle")` and say so quietly in the corner in phosphor
 text. The piece must never show a blank frame.
 
+Smoothing, decided 2026-09-10: the fast readings (per-core and total
+CPU, network rates) follow each sample as a critically damped spring
+(`Stats.OMEGA = 4.5`, closed-form step so it is stable at 3 fps), a
+needle with inertia that is still gliding when the next sample lands
+and never overshoots. The first-order easing in the sketch above
+covered most of each half-second step and then stopped, a lurch and a
+hold twice a second; the heartbeat had masked it. Memory and load keep
+first-order easing at their slow rates.
+
 ## Project settings
 
 ```
