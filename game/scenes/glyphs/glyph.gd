@@ -5,13 +5,20 @@ extends Node2D
 ## captions are the same on every panel, the way every reference screen
 ## is captioned the same way.
 
-const PULSE_DECAY := 0.6
+## The heartbeat. Each sample lifts an inner energy to 1, which falls
+## away over PULSE_DECAY; what the glyphs draw, `_pulse`, follows it with
+## a short lag (PULSE_FOLLOW per second), so the beat is a swell and no
+## frame ever jumps in brightness. Snapping `_pulse` to 1 on the sample
+## read as a strobe at any frame rate (Josh, 2026-09-10).
+const PULSE_DECAY := 1.2
+const PULSE_FOLLOW := 10.0
 const SMALL := 10
 
 @export var size := Vector2(300.0, 200.0)
 
 var _font: Font = Palette.FONT
 var _pulse := 0.0
+var _energy := 0.0
 
 
 func _ready() -> void:
@@ -20,11 +27,12 @@ func _ready() -> void:
 
 
 func _on_sample(_s: StatSample) -> void:
-	_pulse = 1.0
+	_energy = 1.0
 
 
 func _process(dt: float) -> void:
-	_pulse = maxf(_pulse - dt / PULSE_DECAY, 0.0)
+	_energy = maxf(_energy - dt / PULSE_DECAY, 0.0)
+	_pulse = lerpf(_pulse, _energy, 1.0 - exp(-PULSE_FOLLOW * dt))
 	queue_redraw()
 
 
