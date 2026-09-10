@@ -1,0 +1,47 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scenes/main.gd" id="1"]
+[ext_resource type="PackedScene" path="res://scenes/composition/yggdrasil.tscn" id="2"]
+
+[sub_resource type="Environment" id="env"]
+background_mode = 3
+glow_enabled = true
+glow_levels/1 = 0.0
+glow_levels/2 = 0.0
+glow_levels/3 = 1.0
+glow_levels/4 = 0.0
+glow_levels/5 = 1.0
+glow_levels/6 = 0.0
+glow_levels/7 = 0.0
+glow_intensity = 0.5
+glow_strength = 1.0
+glow_bloom = 0.03
+glow_blend_mode = 1
+glow_hdr_threshold = 1.0
+glow_hdr_scale = 2.0
+
+[node name="Main" type="Node2D"]
+script = ExtResource("1")
+
+[node name="Environment" type="WorldEnvironment" parent="."]
+environment = SubResource("env")
+
+[node name="Ground" type="ColorRect" parent="."]
+offset_right = 1440.0
+offset_bottom = 900.0
+color = Color(0.027, 0.02, 0.039, 1)
+
+[node name="Composition" parent="." instance=ExtResource("2")]
+
+[node name="Header" type="Label" parent="."]
+offset_left = 0.0
+offset_top = 14.0
+offset_right = 1440.0
+text = "NERVIEWER"
+horizontal_alignment = 1
+
+[node name="Status" type="Label" parent="."]
+offset_left = 14.0
+offset_top = 874.0
+text = "SYNTHETIC"
+
