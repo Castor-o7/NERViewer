@@ -420,10 +420,14 @@ the two remaining shows from the original list; Terra Trance (Final
 Fantasy VI Esper glow: violet ground, orchid hairlines, magenta-pink core)
 at Josh's request. Seven palettes. Yggdrasil stays default.
 
-Font: a thin condensed uppercase sans, chosen by setting it beside
-`core_ring`. The references use one weight, small, letterspaced. Still
-Godot's default as of Phase 2; this is the largest remaining gap between
-the piece and the references.
+Font: chosen 2026-09-10, Avenir Next Condensed, which ships with macOS
+and needs no file in the repo. `fonts/ui.tres` is a FontVariation over a
+SystemFont (Regular, one pixel of letterspacing) and is the project theme
+font, so every Label has it; drawn text takes `Palette.FONT`.
+`fonts/display.tres` is the Ultra Light cut with wider spacing, for large
+numerals. The cockpit uses the same two files, so the suite has one face.
+`tools/shots.gd` sets `main.dockable = false` so a live cockpit's dock
+file cannot shrink its frame (it did, on 2026-09-10).
 
 ## Tools
 

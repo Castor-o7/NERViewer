@@ -10,7 +10,7 @@ const SMALL := 10
 
 @export var size := Vector2(300.0, 200.0)
 
-var _font: Font = ThemeDB.fallback_font
+var _font: Font = Palette.FONT
 var _pulse := 0.0
 
 

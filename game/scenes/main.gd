@@ -46,6 +46,9 @@ var minimal := false
 var desktop := false
 var backing := 0
 var docked := false
+## Tools that render the piece set this off before adding it, so a live
+## cockpit's dock file cannot shrink their frame.
+var dockable := true
 var _dock_mtime := -1
 var _dock_timer := DOCK_POLL
 var _core_home := Vector2.ZERO
@@ -200,6 +203,8 @@ func _process(dt: float) -> void:
 ## Docking. The file is polled once a second; its modified time is the
 ## only thing compared, so rewriting the same rect costs nothing.
 func _poll_dock() -> void:
+	if not dockable:
+		return
 	var mtime := FileAccess.get_modified_time(DOCK_FILE) if FileAccess.file_exists(DOCK_FILE) else 0
 	if mtime == _dock_mtime:
 		return

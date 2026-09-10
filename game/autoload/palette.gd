@@ -95,6 +95,13 @@ const THEMES := {
 
 var theme_name := "yggdrasil"
 
+## The one face for every label: a thin condensed sans, uppercase and
+## letterspaced, from the system (Avenir Next Condensed; macOS only, as is
+## everything else). Labels get it through the project theme; drawn text
+## takes it from here. DISPLAY is the ultra-light cut for large numerals.
+const FONT: Font = preload("res://fonts/ui.tres")
+const DISPLAY: Font = preload("res://fonts/display.tres")
+
 ## Smoked glass behind each panel in desktop mode: 0 is bare desktop.
 ## Cycled by the G key. Windowed mode ignores it; the ground is opaque.
 const BACKING_LEVELS := [0.0, 0.35, 0.7]

@@ -1,0 +1,10 @@
+[gd_resource type="FontVariation" load_steps=2 format=3]
+
+[sub_resource type="SystemFont" id="sys"]
+font_names = PackedStringArray("Avenir Next Condensed")
+font_weight = 100
+subpixel_positioning = 1
+
+[resource]
+base_font = SubResource("sys")
+spacing_glyph = 2
