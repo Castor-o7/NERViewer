@@ -39,7 +39,10 @@ func _draw() -> void:
 			var k := lerpf(0.75, 1.5, v)
 			var c := Color(tint.r * k, tint.g * k, tint.b * k, 1.0)
 			halo_line(Vector2(x, base), Vector2(x, base - bar), tint, 1.0, clampf((v - 0.4) / 0.6, 0.0, 1.0) * 0.2)
-			draw_line(Vector2(x, base), Vector2(x, base - bar), c, maxf(col_w - 1.3, 1.0), true)
+			# Columns nearly touch: Godot 4.7 stopped feathering antialiased
+			# lines, so the 1.3 px gap that read as one slab in 4.3 showed as
+			# stripes; 0.3 px keeps the slab (upgrade, 2026-09-15).
+			draw_line(Vector2(x, base), Vector2(x, base - bar), c, maxf(col_w - 0.3, 1.0), true)
 
 	draw_brackets(Palette.dim(frame, 0.85))
 	draw_ruler(h.y - 8.0, Palette.dim(frame, 0.35), 24)

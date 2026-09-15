@@ -16,9 +16,9 @@ and swap with one constant. Josh chose Yggdrasil on 2026-09-09 after living
 with both; it is the default. NERV stays available on the P key, and more
 design exploration is planned once the functionality is complete.
 
-Godot 4.3 (Forward+), GDScript for the piece, a ~250-line Swift helper for
+Godot 4.7.2 (Forward+, Metal on this machine), GDScript for the piece, a ~250-line Swift helper for
 the numbers. macOS only, Apple Silicon first. Everything in the stats layer
-was probed on this machine (M2, 8 cores, macOS 15.7, Godot 4.3.stable,
+was probed on this machine (M2, 8 cores, macOS 15.7, Godot 4.3.stable, re-checked on 4.7.2.stable 2026-09-12,
 `/usr/bin/swiftc` with no Xcode) on 2026-09-09; the validated probe sources
 are in `helper/probes/`.
 ## Principles
@@ -331,7 +331,7 @@ first-order easing at their slow rates.
 
 ```
 [application]
-config/features=PackedStringArray("4.3", "Forward Plus")
+config/features=PackedStringArray("4.7", "Forward Plus")
 run/main_scene="res://scenes/main.tscn"
 
 [autoload]

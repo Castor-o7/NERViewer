@@ -1,10 +1,10 @@
 #!/bin/sh
 # Build dist/NERViewer.app: a self-contained app with the yggstat helper
-# inside it. Needs Godot 4.3 export templates (Editor > Manage Export
+# inside it. Needs Godot 4.7.2 export templates (Editor > Manage Export
 # Templates) and the Xcode command line tools for swiftc and codesign.
 set -e
 cd "$(dirname "$0")/.."
-GODOT=/Applications/Godot.app/Contents/MacOS/Godot
+GODOT=${GODOT:-/Applications/Godot.app/Contents/MacOS/Godot}
 command -v godot >/dev/null 2>&1 && GODOT=godot
 
 echo "-- helper"
