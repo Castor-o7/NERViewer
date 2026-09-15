@@ -190,14 +190,18 @@ take the helper down:
 sees only this.
 
 ```gdscript
+@abstract
 class_name StatSource
 extends Node
 signal sample(s: StatSample)
 signal failed(reason: String)
-func start() -> void: pass
-func stop() -> void: pass
-func source_name() -> String: return "none"
+@abstract func start() -> void
+@abstract func stop() -> void
+@abstract func source_name() -> String
 ```
+
+Abstract since 2026-09-15 (Godot 4.7): a source that forgets a method
+fails at load, not the first time a glyph asks.
 
 **HelperStatSource** spawns yggstat with `OS.execute_with_pipe` (new in
 4.3, present in this binary) and reads it on a Thread. The read loop copes

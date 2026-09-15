@@ -7,7 +7,7 @@ extends Node
 
 signal changed
 
-const THEMES := {
+const THEMES: Dictionary[String, Dictionary] = {
 	"nerv": {
 		"ground": Color("#07050A"),
 		"frame": Color("#C8321E"),

@@ -28,7 +28,7 @@ const RATE := {
 
 var raw := StatSample.new()
 var smooth := StatSample.new()
-var history := {}
+var history: Dictionary[String, History] = {}
 var source: StatSource
 var status := ""
 
