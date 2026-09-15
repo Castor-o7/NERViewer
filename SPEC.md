@@ -520,3 +520,12 @@ complete; what remains is the design pass.
   must be switched off in desktop mode, because its `glow_bloom` fraction
   of everything leaks through as a banded disc around the core. Desktop
   mode's only glow is the drawn one.
+- Light past white (2026-09-15, Godot 4.7.2): the window asks macOS for
+  HDR output (`display/window/hdr/request_hdr_output`). The piece already
+  paints emitters above 1.0 for the glow pass, so nothing else changed:
+  at full brightness the screen has no headroom and the look is exactly
+  the SDR one; as the brightness slider comes down this panel opens up
+  to twice SDR white and the hot arcs, the core and the drawn halos burn
+  past white instead of clipping. `tools/hdr_probe.tscn` prints whether
+  HDR is on and the current headroom. Costs nothing: the viewer has
+  rendered in a float, linear 2D viewport since 4.3.

@@ -27,6 +27,7 @@ window/size/viewport_width=1440
 window/size/viewport_height=900
 window/stretch/mode="canvas_items"
 window/per_pixel_transparency/allowed=true
+window/hdr/request_hdr_output=true
 
 [gui]
 
