@@ -106,9 +106,16 @@ func _load_prefs() -> void:
 		set_minimal(true, true)
 	if bool(cfg.get_value("look", "desktop", false)):
 		set_desktop(true)
+	# The position is kept in desktop units, which change with the screens
+	# attached; one saved on a monitor that is gone would put the window
+	# where no screen is. Keep it only if a screen still holds it.
 	var pos = cfg.get_value("window", "position", null)
 	if pos is Vector2i:
-		get_window().position = pos
+		for i in DisplayServer.get_screen_count():
+			var screen := Rect2i(DisplayServer.screen_get_position(i), DisplayServer.screen_get_size(i))
+			if screen.grow(-40).has_point(pos):
+				get_window().position = pos
+				break
 
 
 func _save_prefs() -> void:
