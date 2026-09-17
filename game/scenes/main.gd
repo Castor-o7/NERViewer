@@ -299,6 +299,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			_save_prefs()
 			get_tree().quit()
 		KEY_S:
-			var path := ProjectSettings.globalize_path("res://../screenshots/manual.png")
+			var stamp := Time.get_datetime_string_from_system().replace(":", "-")
+			var path := OS.get_system_dir(OS.SYSTEM_DIR_PICTURES).path_join("NERViewer %s.png" % stamp)
 			get_viewport().get_texture().get_image().save_png(path)
 			print("saved ", path)

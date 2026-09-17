@@ -78,7 +78,8 @@ NERViewer/
       alpha_probe.tscn/.gd   windowed: does the glow carry alpha in desktop mode
     export_presets.cfg       macOS preset for tools/build_app.sh
   tools/
-    build_app.sh             helper + export + bundle + re-sign -> dist/NERViewer.app
+    build_app.sh             helper + export + bundle + arm64 thin + re-sign -> dist/NERViewer.app
+    install.sh               dist app -> /Applications; re-points the LaunchAgent
     launch_agent.sh          install|remove a LaunchAgent that starts the app at login
   dist/                      built app (gitignored)
 ```

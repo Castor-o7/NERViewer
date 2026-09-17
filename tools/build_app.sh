@@ -17,6 +17,12 @@ mkdir -p dist
 
 echo "-- bundle helper"
 cp game/bin/yggstat dist/NERViewer.app/Contents/MacOS/yggstat
+
+echo "-- Apple Silicon only"
+# The official export templates are universal; dropping the Intel half
+# halves the app. (An arm64 preset would need a custom template.)
+EXE="dist/NERViewer.app/Contents/MacOS/NERViewer"
+lipo "$EXE" -thin arm64 -output "$EXE.arm64" && mv "$EXE.arm64" "$EXE"
 # Adding a binary invalidates the ad-hoc signature; sign again.
 codesign --force --deep --sign - dist/NERViewer.app
 

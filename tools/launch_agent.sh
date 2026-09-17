@@ -2,12 +2,15 @@
 # Start NERViewer at login, or stop doing so.
 #   tools/launch_agent.sh install
 #   tools/launch_agent.sh remove
-# Uses dist/NERViewer.app; run tools/build_app.sh first.
+# Uses /Applications/NERViewer.app if tools/install.sh put it there, else
+# dist/NERViewer.app; run tools/build_app.sh first.
 set -e
 cd "$(dirname "$0")/.."
 LABEL=edu.pdx.josh.nerviewer
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-APP="$(pwd)/dist/NERViewer.app/Contents/MacOS/NERViewer"
+BUNDLE="/Applications/NERViewer.app"
+[ -d "$BUNDLE" ] || BUNDLE="$(pwd)/dist/NERViewer.app"
+APP="$BUNDLE/Contents/MacOS/NERViewer"
 
 case "$1" in
   install)
