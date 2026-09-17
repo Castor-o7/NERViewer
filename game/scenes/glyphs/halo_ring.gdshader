@@ -10,7 +10,7 @@ const float REACH = 38.0;
 const float FLOOR = 0.15;
 // The soft edge Godot gives an antialiased stroke, in design units:
 // along its sides and at its butt ends. Fitted to the drawn strokes with
-// tools/sigil_check.tscn.
+// tools/frame_check.tscn.
 const float FEATHER = 0.7;
 const float END_FEATHER = 1.25;
 

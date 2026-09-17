@@ -18,10 +18,49 @@ var _font: Font = Palette.FONT
 
 func _ready() -> void:
 	Palette.changed.connect(queue_redraw)
+	Stats.sampled.connect(_on_sampled)
+	_backing = add_layer(_paint_backing)
 
 
 func _process(_dt: float) -> void:
-	queue_redraw()
+	_refresh()
+
+
+## Once a frame: notice a change of look, pose the layers, and draw what
+## is left in _draw again, unless the glyph says nothing in it has changed.
+func _refresh() -> void:
+	var look := [Palette.theme_name, Palette.thermal, Palette.halo, Palette.backing_alpha]
+	var key: Variant = _live_key()
+	if look != _look:
+		_look = look
+		key = null
+		_backing.queue_redraw()
+		for layer in _data_layers:
+			layer.queue_redraw()
+	var frame := Palette.dim(Palette.color("frame"), 1.0)
+	for layer in _frame_layers:
+		layer.modulate = frame
+	_pose()
+	if key == null or key != _live:
+		_live = key
+		queue_redraw()
+
+
+## Tint and turn the layers that breathe; called once a frame.
+func _pose() -> void:
+	pass
+
+
+## What _draw depends on, for a glyph whose _draw holds only text that
+## changes now and then: it is drawn again when this changes. Null (the
+## default) draws every frame.
+func _live_key() -> Variant:
+	return null
+
+
+func _on_sampled(_s: StatSample) -> void:
+	for layer in _data_layers:
+		layer.queue_redraw()
 
 
 func half() -> Vector2:
@@ -48,6 +87,30 @@ func add_layer(paint: Callable) -> Layer:
 	return layer
 
 
+## A layer of what follows the history rather than the needle: painted in
+## its real colors, and again whenever a sample lands (twice a second) or
+## the look changes.
+func add_data_layer(paint: Callable) -> Layer:
+	var layer := add_layer(paint)
+	_data_layers.append(layer)
+	return layer
+
+
+## A layer of frame-colored strokes at fixed alphas (brackets, rulers):
+## painted in white at those alphas, tinted with the frame color.
+func add_frame_layer(paint: Callable) -> Layer:
+	var layer := add_layer(paint)
+	_frame_layers.append(layer)
+	return layer
+
+
+var _backing: Layer
+var _data_layers: Array[Layer] = []
+var _frame_layers: Array[Layer] = []
+var _look := []
+var _live: Variant = null
+
+
 ## Halo passes: [extra width, alpha], innermost first, scaled by heat.
 ## Twelve finely graded layers so the falloff reads as continuous; with
 ## fewer, each layer's edge shows as a step once the HDR blur is gone.
@@ -69,20 +132,20 @@ static func _build_halo() -> Array:
 	return out
 
 
-func halo_arc(center: Vector2, radius: float, start: float, end: float, points: int, color: Color, width: float, heat: float) -> void:
+func halo_arc(center: Vector2, radius: float, start: float, end: float, points: int, color: Color, width: float, heat: float, on: CanvasItem = self) -> void:
 	if not Palette.halo:
 		return
 	heat = maxf(heat, HALO_FLOOR)
 	for layer in _halo:
-		draw_arc(center, radius, start, end, points, Color(color.r, color.g, color.b, layer[1] * heat), width + layer[0], true)
+		on.draw_arc(center, radius, start, end, points, Color(color.r, color.g, color.b, layer[1] * heat), width + layer[0], true)
 
 
-func halo_line(from: Vector2, to: Vector2, color: Color, width: float, heat: float) -> void:
+func halo_line(from: Vector2, to: Vector2, color: Color, width: float, heat: float, on: CanvasItem = self) -> void:
 	if not Palette.halo:
 		return
 	heat = maxf(heat, HALO_FLOOR)
 	for layer in _halo:
-		draw_line(from, to, Color(color.r, color.g, color.b, layer[1] * heat), width + layer[0], true)
+		on.draw_line(from, to, Color(color.r, color.g, color.b, layer[1] * heat), width + layer[0], true)
 
 
 func halo_circle(center: Vector2, radius: float, color: Color, heat: float) -> void:
@@ -93,12 +156,12 @@ func halo_circle(center: Vector2, radius: float, color: Color, heat: float) -> v
 		draw_circle(center, radius + layer[0] * 0.5, Color(color.r, color.g, color.b, layer[1] * heat))
 
 
-func halo_polyline(pts: PackedVector2Array, color: Color, width: float, heat: float) -> void:
+func halo_polyline(pts: PackedVector2Array, color: Color, width: float, heat: float, on: CanvasItem = self) -> void:
 	if not Palette.halo or pts.size() < 2:
 		return
 	heat = maxf(heat, HALO_FLOOR)
 	for layer in _halo:
-		draw_polyline(pts, Color(color.r, color.g, color.b, layer[1] * heat), width + layer[0], true)
+		on.draw_polyline(pts, Color(color.r, color.g, color.b, layer[1] * heat), width + layer[0], true)
 
 
 ## A smooth radial glow for compact shapes like the core, where layered
@@ -136,11 +199,11 @@ func halo_glow(center: Vector2, radius: float, color: Color, heat: float) -> voi
 	draw_texture_rect(_radial_texture(), rect, false, Color(color.r, color.g, color.b, 0.6 * heat))
 
 
-## Smoked glass under the panel, only in desktop mode with a backing level set.
-func draw_backing() -> void:
-	if Palette.backing_alpha <= 0.0:
-		return
-	draw_rect(Rect2(-half(), size), Palette.dim(Palette.color("ground"), Palette.backing_alpha), true)
+## Smoked glass under the panel, only in desktop mode with a backing level
+## set. The first layer, so it lies under all the others.
+func _paint_backing(on: Layer) -> void:
+	if Palette.backing_alpha > 0.0:
+		on.draw_rect(Rect2(-half(), size), Palette.dim(Palette.color("ground"), Palette.backing_alpha), true)
 
 
 ## Corner brackets, not a box. The reference frames are open.

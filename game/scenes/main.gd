@@ -46,6 +46,8 @@ var docked := false
 ## Tools that render the piece set this off before adding it, so a live
 ## cockpit's dock file cannot shrink their frame.
 var dockable := true
+## Tools also set this off, so they neither load nor save the prefs.
+var persist := true
 var _dock_mtime := -1
 var _dock_timer := DOCK_POLL
 var _core_home := Vector2.ZERO
@@ -93,6 +95,8 @@ func set_backing(level: int) -> void:
 
 
 func _load_prefs() -> void:
+	if not persist:
+		return
 	var cfg := ConfigFile.new()
 	if cfg.load(PREFS) != OK:
 		return
@@ -108,8 +112,8 @@ func _load_prefs() -> void:
 
 
 func _save_prefs() -> void:
-	if docked:
-		return  # the dock's geometry and modes are not ours to keep
+	if docked or not persist:
+		return  # the dock's geometry and modes are not ours to keep; tools keep nothing
 	var cfg := ConfigFile.new()
 	cfg.set_value("look", "palette", Palette.theme_name)
 	cfg.set_value("look", "minimal", minimal)

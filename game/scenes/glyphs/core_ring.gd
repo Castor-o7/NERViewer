@@ -18,7 +18,6 @@ var _drift := 0.0
 ## The strokes that only breathe or turn are layers, drawn once (see
 ## Glyph.Layer); _pose() tints and turns them each frame. What follows the
 ## numbers (the arcs, the core, the text) is drawn each frame in _draw.
-var _backing: Layer
 var _guides: Layer
 var _dashes_outer: Layer
 var _dashes_inner: Layer
@@ -31,24 +30,22 @@ const HaloRing := preload("res://scenes/glyphs/halo_ring.gdshader")
 const HALO_SLOTS := 16
 var _halo_outer: Layer
 var _halo_inner: Layer
-var _backing_key := Color()
 var _perf := -1
 var _eff := -1
 
 
 func _ready() -> void:
 	super()
-	_backing = add_layer(_paint_backing)
 	_guides = add_layer(_paint_guides)
 	_dashes_outer = add_layer(_paint_dashed_ring.bind((outer_radius + inner_radius) * 0.5, 48))
 	_dashes_inner = add_layer(_paint_dashed_ring.bind(inner_radius - 30.0, 24))
 	_scale_circle = add_layer(_paint_scale_circle)
 	_scale_ticks = add_layer(_paint_scale_ticks)
 	_core_ticks = add_layer(_paint_core_ticks)
-	_statics = add_layer(_paint_statics)
+	_statics = add_frame_layer(_paint_statics)
 	_halo_outer = _add_halo(outer_radius, 3.0)
 	_halo_inner = _add_halo(inner_radius, 2.5)
-	_pose()
+	_refresh()
 
 
 func _add_halo(radius: float, width: float) -> Layer:
@@ -64,7 +61,6 @@ func _add_halo(radius: float, width: float) -> Layer:
 
 func _process(dt: float) -> void:
 	_drift = fmod(_drift + dt * TAU / DRIFT_PERIOD, TAU)
-	_pose()
 	super(dt)
 
 
@@ -73,12 +69,8 @@ func _pose() -> void:
 	var frame := Palette.color("frame")
 	var light := Palette.color("light")
 	var breath := Palette.breath()
-	# The layers whose shape follows the machine or the mode are drawn
-	# again only when that changes.
-	var backing := Palette.dim(Palette.color("ground"), Palette.backing_alpha)
-	if backing != _backing_key:
-		_backing_key = backing
-		_backing.queue_redraw()
+	# The layers whose shape follows the machine are drawn again only
+	# when it changes.
 	var n := s.cpu_cores.size()
 	var eff := clampi(s.cpu_eff_cores, 0, n)
 	if eff != _eff or n - eff != _perf:
@@ -103,7 +95,6 @@ func _pose() -> void:
 	_scale_ticks.modulate = scale_color
 	_scale_circle.modulate = Palette.dim(scale_color, scale_color.a * 0.5)
 	_core_ticks.modulate = Palette.dim(frame, 0.4 + 0.2 * breath)
-	_statics.modulate = Palette.dim(frame, 1.0)
 	_pose_halo(_halo_outer, s.cpu_cores.slice(eff, n), frame, light)
 	_pose_halo(_halo_inner, s.cpu_cores.slice(0, eff), frame, light)
 
@@ -180,11 +171,6 @@ func _draw_group(vals: PackedFloat32Array, radius: float, frame: Color, light: C
 		var tint := frame.lerp(light, v * 0.85)
 		var pts := maxi(int(64 * v) + 4, 4)
 		draw_arc(Vector2.ZERO, radius, start, end, pts, Palette.emit(tint, v), width, true)
-
-
-func _paint_backing(on: Layer) -> void:
-	if _backing_key.a > 0.0:
-		on.draw_rect(Rect2(-half(), size), _backing_key, true)
 
 
 func _paint_guides(on: Layer) -> void:

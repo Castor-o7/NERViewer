@@ -18,6 +18,7 @@ const MOMENTS := {
 func _ready() -> void:
 	var main: Node = load("res://scenes/main.tscn").instantiate()
 	main.dockable = false
+	main.persist = false
 	add_child(main)
 	await get_tree().process_frame
 	var syn := SyntheticStatSource.new()

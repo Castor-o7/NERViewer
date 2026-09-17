@@ -3,6 +3,7 @@ extends Node
 ## synthetic idle scenario, in a given mode.
 ##   Godot --path game res://tools/profile.tscn -- --mode <mode>
 ##   full    the whole piece in its window
+##   desktop the whole piece over the desktop, drawn halos on
 ##   docked  the sigil alone, as the cockpit docks it
 ##   nohalo  docked, halos off
 ##   frozen  docked, drawn once and never again: the engine's own floor
@@ -24,12 +25,20 @@ func _ready() -> void:
 			mode = args[i + 1]
 	var main: Node = load("res://scenes/main.tscn").instantiate()
 	main.dockable = false
+	main.persist = false
 	add_child(main)
 	await get_tree().process_frame
 	var syn := SyntheticStatSource.new()
 	Stats.use(syn)
 	syn.set_scenario("idle")
-	if mode != "full":
+	if mode.begins_with("hide:"):
+		# The whole piece in its window, less one glyph (or "hide:all").
+		for g in main.get_node("Composition").get_children():
+			if mode == "hide:all" or g.name == mode.trim_prefix("hide:"):
+				g.visible = false
+	elif mode == "desktop":
+		main.set_desktop(true, false)
+	elif mode != "full":
 		main.set_docked(true, RECT)
 	if mode == "nohalo":
 		Palette.halo = false
