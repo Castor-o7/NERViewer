@@ -117,6 +117,8 @@ var halo := false
 ## Thermal tier from the latest sample. At serious and critical the frame
 ## color itself reddens: the whole piece changes mood, not one glyph.
 var thermal := 0
+## Tools that compare frames hold the breath still here (0..1); -1 is the clock.
+var breath_pin := -1.0
 
 
 func color(key: String) -> Color:
@@ -132,6 +134,8 @@ func breath_period() -> float:
 
 ## The one slow breath, 0..1 and back, shared by everything that breathes.
 func breath() -> float:
+	if breath_pin >= 0.0:
+		return breath_pin
 	var period := breath_period()
 	var phase := fmod(Time.get_ticks_msec() / 1000.0, period) / period
 	return 0.5 - 0.5 * cos(TAU * phase)

@@ -28,6 +28,26 @@ func half() -> Vector2:
 	return size * 0.5
 
 
+## A part of a glyph whose shape does not change from frame to frame:
+## drawn once, in white, then tinted (modulate) and turned (rotation) as
+## a node. Re-issuing the same strokes thirty times a second was half
+## the cost of the docked sigil (tools/profile.tscn, 2026-09-17). Layers
+## lie under the glyph's own _draw, in the order they were added.
+class Layer extends Node2D:
+	var paint: Callable
+
+	func _draw() -> void:
+		paint.call(self)
+
+
+func add_layer(paint: Callable) -> Layer:
+	var layer := Layer.new()
+	layer.paint = paint
+	layer.show_behind_parent = true
+	add_child(layer)
+	return layer
+
+
 ## Halo passes: [extra width, alpha], innermost first, scaled by heat.
 ## Twelve finely graded layers so the falloff reads as continuous; with
 ## fewer, each layer's edge shows as a step once the HDR blur is gone.
@@ -124,23 +144,23 @@ func draw_backing() -> void:
 
 
 ## Corner brackets, not a box. The reference frames are open.
-func draw_brackets(color: Color, arm: float = 18.0) -> void:
+func draw_brackets(color: Color, arm: float = 18.0, on: CanvasItem = self) -> void:
 	var h := half()
 	for sx in [-1.0, 1.0]:
 		for sy in [-1.0, 1.0]:
 			var c := Vector2(sx * h.x, sy * h.y)
-			draw_line(c, c + Vector2(-sx * arm, 0.0), color, 1.0, true)
-			draw_line(c, c + Vector2(0.0, -sy * arm), color, 1.0, true)
+			on.draw_line(c, c + Vector2(-sx * arm, 0.0), color, 1.0, true)
+			on.draw_line(c, c + Vector2(0.0, -sy * arm), color, 1.0, true)
 
 
 ## Hairline ticks along a horizontal edge, the reference's rulers.
-func draw_ruler(y: float, color: Color, count: int = 20, up: bool = true) -> void:
+func draw_ruler(y: float, color: Color, count: int = 20, up: bool = true, on: CanvasItem = self) -> void:
 	var h := half()
 	var dir := -1.0 if up else 1.0
 	for i in count + 1:
 		var x := -h.x + i * size.x / count
 		var len := 5.0 if i % 5 == 0 else 2.5
-		draw_line(Vector2(x, y), Vector2(x, y + dir * len), color, 1.0, true)
+		on.draw_line(Vector2(x, y), Vector2(x, y + dir * len), color, 1.0, true)
 
 
 func label(pos: Vector2, text: String, color: Color, align := HORIZONTAL_ALIGNMENT_LEFT, px: int = SMALL) -> void:
