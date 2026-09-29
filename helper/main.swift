@@ -6,6 +6,37 @@
 // helper/build.sh.
 //
 //   yggstat [--interval 500] [--once]
+//
+// cpu, the values the core rings show (the full contract, and the Linux
+// kinds, are in yggstat.py's header):
+//
+//   Apple Silicon  cores: one per logical CPU, which is one per core (no
+//                  SMT), in host_processor_info order, E-cores first.
+//                  perf/eff: hw.perflevel0/1.logicalcpu. No inner or
+//                  inner_kind: the reader takes inner = eff, kind eff.
+//                  This line is byte for byte what it was before Intel
+//                  Macs were handled; keep it so.
+//   Intel Mac      No perflevels. perf: hw.physicalcpu, eff: 0.
+//                  With Hyper-Threading (logical == 2 * physical), kind
+//                  smt: each core's second thread on the inner ring, its
+//                  first on the outer, as Linux does on a one-cluster SMT
+//                  CPU; cores has 2 * perf values and inner = perf.
+//                  Otherwise kind none, inner 0, one value per core.
+//                  total: the mean over physical cores with a core's two
+//                  threads merged as 1 - (1-a)(1-b), as on Linux, so the
+//                  headline means the same whatever the rings show.
+//
+// ASSUMPTION, to verify on an Intel Mac: XNU numbers logical CPUs in
+// local APIC ID order, and the two threads of a core differ only in the
+// APIC ID's lowest bit, so CPUs 2k and 2k+1 are one core's two threads.
+// Activity Monitor's CPU History shows the odd-numbered CPUs idling as
+// second threads do, which agrees. If a machine numbers them otherwise
+// (all first threads, then all second threads, as Linux does), the rings
+// still show every thread truthfully but a core's two threads land in
+// different slices. Check with a single-threaded load pinned by the
+// scheduler: one outer slice and the inner slice under it should never
+// be busy at once far above chance. Uncompiled when written (no swiftc
+// on the Linux box, 2026-09-29).
 
 import Foundation
 import Darwin
@@ -34,6 +65,9 @@ func sysctlInt(_ name: String) -> Int64 {
 
 let perfCores = Int(sysctlInt("hw.perflevel0.logicalcpu"))
 let effCores = Int(sysctlInt("hw.perflevel1.logicalcpu"))
+/// Every Apple Silicon Mac has E-cores; arm64 says so even if one did not.
+let appleSilicon = effCores > 0 || sysctlInt("hw.optional.arm64") == 1
+let physicalCores = Int(sysctlInt("hw.physicalcpu"))
 let memTotal = sysctlInt("hw.memsize")
 var pageSize: vm_size_t = 0
 host_page_size(mach_host_self(), &pageSize)
@@ -73,6 +107,26 @@ func cpuUtil(_ prev: [CoreTicks], _ cur: [CoreTicks]) -> [Double] {
         let total = idle + d(p.user, c.user) + d(p.system, c.system) + d(p.nice, c.nice)
         return total > 0 ? max(0, min(1, 1 - idle / total)) : 0
     }
+}
+
+/// How an Intel Mac's per-CPU values go onto the rings: the logical CPU
+/// behind each value, inner ring first, and the counts that describe it.
+struct IntelLayout {
+    let order: [Int]
+    let perf: Int
+    let inner: Int
+    let kind: String
+}
+
+/// `n` is the number of logical CPUs host_processor_info returned. See
+/// the assumption in the header about which CPUs are siblings.
+func intelLayout(_ n: Int) -> IntelLayout {
+    if physicalCores > 0 && n == 2 * physicalCores {
+        let first = (0..<physicalCores).map { 2 * $0 }
+        let second = first.map { $0 + 1 }
+        return IntelLayout(order: second + first, perf: physicalCores, inner: physicalCores, kind: "smt")
+    }
+    return IntelLayout(order: Array(0..<n), perf: n, inner: 0, kind: "none")
 }
 
 // MARK: - Memory
@@ -155,9 +209,26 @@ func sample() -> String {
     let thermal = ProcessInfo.processInfo.thermalState.rawValue
     let uptime = ProcessInfo.processInfo.systemUptime
 
-    let coreList = cores.map { fmt($0) }.joined(separator: ",")
+    let cpu: String
+    if appleSilicon {
+        let coreList = cores.map { fmt($0) }.joined(separator: ",")
+        cpu = "\"cpu\":{\"cores\":[\(coreList)],\"total\":\(fmt(total)),\"perf\":\(perfCores),\"eff\":\(effCores)},"
+    } else {
+        let l = intelLayout(cores.count)
+        let coreList = l.order.map { fmt(cores[$0]) }.joined(separator: ",")
+        var merged = total
+        if l.kind == "smt" && l.inner > 0 {
+            // One core's threads are order[i] and order[i + inner].
+            let busy = (0..<l.inner).map { i -> Double in
+                1 - (1 - cores[l.order[i]]) * (1 - cores[l.order[i + l.inner]])
+            }
+            merged = busy.reduce(0, +) / Double(l.inner)
+        }
+        cpu = "\"cpu\":{\"cores\":[\(coreList)],\"total\":\(fmt(merged)),\"perf\":\(l.perf),\"eff\":0,"
+            + "\"inner\":\(l.inner),\"inner_kind\":\"\(l.kind)\"},"
+    }
     return "{\"t\":\(fmt(now)),"
-        + "\"cpu\":{\"cores\":[\(coreList)],\"total\":\(fmt(total)),\"perf\":\(perfCores),\"eff\":\(effCores)},"
+        + cpu
         + "\"load\":[\(fmt(load[0], 2)),\(fmt(load[1], 2)),\(fmt(load[2], 2))],"
         + "\"mem\":{\"total\":\(memTotal),\"used\":\(wired + active + compressed),\"wired\":\(wired),"
         + "\"compressed\":\(compressed),\"free\":\(free),\"pressure\":\(fmt(pressure))},"

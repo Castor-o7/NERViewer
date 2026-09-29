@@ -1,7 +1,9 @@
 extends Glyph
 ## Load average as three sparse dot traces over the last three minutes:
 ## 1, 5 and 15 minutes, each at its own cadence so the slow ones are
-## sparser. Height is load over core count, so 1.0 is every core busy.
+## sparser. Height is load over the logical CPU count, as uptime reads it:
+## 1.0 is every hardware thread busy (on Apple Silicon, every core). Linux
+## also counts tasks waiting on disk (D state); macOS does not.
 
 
 func _draw() -> void:
@@ -12,7 +14,7 @@ func _draw() -> void:
 	var cool := Palette.color("cool")
 	var h := half()
 	var inner := Rect2(-h.x + 30.0, -h.y + 26.0, size.x - 50.0, size.y - 46.0)
-	var cores := maxi(s.cpu_perf_cores + s.cpu_eff_cores, 1)
+	var cores := maxi(s.logical_cpus(), 1)
 
 	for f in [0.5, 1.0]:
 		var y: float = inner.end.y - f * inner.size.y

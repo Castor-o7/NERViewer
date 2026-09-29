@@ -1,6 +1,8 @@
 extends Glyph
-## CPU history as two racks of bars, P-cores above E-cores. One column per
-## 500 ms sample: the last sixty seconds. Blue at rest, white under load.
+## CPU history as two racks of bars, the outer ring's group above the
+## inner's (P-cores above E-cores; see StatSample.group_names for the
+## rest). One column per 500 ms sample: the last sixty seconds. Blue at
+## rest, white under load.
 
 const COLUMNS := 120
 

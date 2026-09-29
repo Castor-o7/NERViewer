@@ -1,7 +1,8 @@
 extends Node
 ## Renders every synthetic scenario at a representative moment, in each
 ## palette, to screenshots/ beside the project. idle_<palette>.png is the
-## Phase 0 exit criterion: hang it on a wall or stay in Phase 0.
+## Phase 0 exit criterion: hang it on a wall or stay in Phase 0. Then the
+## sigil once per synthetic CPU architecture, arch_<name>.png.
 ##
 ## Run: /Applications/Godot.app/Contents/MacOS/Godot --path game res://tools/shots.tscn
 
@@ -56,6 +57,22 @@ func _ready() -> void:
 		var path := "%s/minimal_%s.png" % [dir, palette]
 		if get_viewport().get_texture().get_image().save_png(path) == OK:
 			written.append(path)
+	# The sigil on every synthetic architecture, mid-spike so both rings
+	# carry something, in the first palette: arch_<name>.png.
+	Palette.set_theme(Palette.THEMES.keys()[0])
+	syn.set_scenario("spike")
+	for arch in SyntheticStatSource.ARCHS:
+		syn.set_arch(arch)
+		syn.seek(MOMENTS["spike"])
+		Stats.reset_history()
+		syn.backfill(180.0)
+		Stats.settle()
+		await RenderingServer.frame_post_draw
+		await RenderingServer.frame_post_draw
+		var path := "%s/arch_%s.png" % [dir, arch]
+		if get_viewport().get_texture().get_image().save_png(path) == OK:
+			written.append(path)
+	syn.set_arch(SyntheticStatSource.DEFAULT_ARCH)
 	main.set_minimal(false, true)
 	print("shots: wrote %d files" % written.size())
 	for p in written:

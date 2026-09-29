@@ -29,8 +29,18 @@ func _ready() -> void:
 
 ## Every sample, from any source, must satisfy these.
 func _check_sample(s: StatSample, tag: String) -> void:
-	_check(s.cpu_cores.size() == s.cpu_perf_cores + s.cpu_eff_cores,
-		"%s: %d cores but perf %d + eff %d" % [tag, s.cpu_cores.size(), s.cpu_perf_cores, s.cpu_eff_cores])
+	# The core contract (helper/yggstat.py's header), in every mode.
+	_check(s.cpu_inner_kind in ["eff", "cluster", "smt", "none"], "%s: inner kind %s" % [tag, s.cpu_inner_kind])
+	_check(s.cpu_cores.size() == s.expected_values(),
+		"%s: %d values but perf %d + eff %d (+ inner %d under smt, kind %s)" % [tag, s.cpu_cores.size(),
+		s.cpu_perf_cores, s.cpu_eff_cores, s.cpu_inner_cores, s.cpu_inner_kind])
+	_check(s.cpu_inner_cores >= 0 and s.cpu_inner_cores <= s.cpu_cores.size(), "%s: inner %d" % [tag, s.cpu_inner_cores])
+	_check(s.cpu_inner_cores == s.cpu_eff_cores if s.cpu_inner_kind == "eff" else s.cpu_eff_cores == 0,
+		"%s: kind %s with eff %d inner %d" % [tag, s.cpu_inner_kind, s.cpu_eff_cores, s.cpu_inner_cores])
+	_check((s.cpu_inner_cores == 0) == (s.cpu_inner_kind == "none"),
+		"%s: kind %s with inner %d" % [tag, s.cpu_inner_kind, s.cpu_inner_cores])
+	_check(not (s.group_names()[1] == "E" and s.cpu_inner_kind in ["cluster", "smt"]),
+		"%s: E named for %s" % [tag, s.cpu_inner_kind])
 	for v in s.cpu_cores:
 		_check(v >= 0.0 and v <= 1.0, "%s: core utilization %f out of range" % [tag, v])
 	_check(s.cpu_total >= 0.0 and s.cpu_total <= 1.0, "%s: cpu_total %f" % [tag, s.cpu_total])
@@ -40,6 +50,8 @@ func _check_sample(s: StatSample, tag: String) -> void:
 	_check(s.net_rx_bps >= 0.0 and s.net_tx_bps >= 0.0, "%s: negative rate" % tag)
 	_check(s.thermal >= 0 and s.thermal <= 3, "%s: thermal %d" % [tag, s.thermal])
 	_check(s.load.x >= 0.0, "%s: load %s" % [tag, s.load])
+	_check(s.logical_cpus() >= s.cpu_perf_cores + s.cpu_eff_cores,
+		"%s: %d logical CPUs under %d cores" % [tag, s.logical_cpus(), s.cpu_perf_cores + s.cpu_eff_cores])
 
 
 func _collect(count: int, timeout_ms: int) -> Array[StatSample]:
@@ -69,6 +81,8 @@ func _probe_helper() -> void:
 		print("helper: %d samples, gaps %s s" % [samples.size(), gaps])
 		var s := samples[-1]
 		print("helper: cores %s total %.3f load %s" % [s.cpu_cores, s.cpu_total, s.load])
+		print("helper: perf %d eff %d inner %d (%s), groups %s" % [s.cpu_perf_cores, s.cpu_eff_cores,
+			s.cpu_inner_cores, s.cpu_inner_kind, s.group_names()])
 		print("helper: mem used %.2f GiB of %.2f, pressure %.2f; net rx %.0f tx %.0f B/s; thermal %d" % [
 			s.mem_used / 1073741824.0, s.mem_total / 1073741824.0, s.mem_pressure,
 			s.net_rx_bps, s.net_tx_bps, s.thermal])
@@ -108,4 +122,23 @@ func _probe_synthetic() -> void:
 				_check(peak_pressure > 0.6, "pressure: peak %.2f never rose" % peak_pressure)
 		print("%s: %d samples, peak total %.2f core %.2f rx %.0f pressure %.2f" % [
 			scenario, samples.size(), peak_total, peak_core, peak_rx, peak_pressure])
+	# Every architecture: its shape holds, and the spike reaches the outer
+	# ring's cores wherever they are.
+	syn.set_scenario("spike")
+	for arch in SyntheticStatSource.ARCHS:
+		syn.set_arch(arch)
+		syn.seek(0.0)
+		var samples := await _collect(40, 3000)  # twenty simulated seconds
+		_check(samples.size() >= 30, "%s: only %d samples" % [arch, samples.size()])
+		var peak_core := 0.0
+		for i in samples.size():
+			_check_sample(samples[i], "%s[%d]" % [arch, i])
+			for v in samples[i].cpu_cores:
+				peak_core = maxf(peak_core, v)
+		_check(peak_core > 0.9, "%s: peak core %.2f never spiked" % [arch, peak_core])
+		if samples.size() > 0:
+			var s := samples[-1]
+			print("%s: %d values, perf %d eff %d inner %d (%s), groups %s" % [arch, s.cpu_cores.size(),
+				s.cpu_perf_cores, s.cpu_eff_cores, s.cpu_inner_cores, s.cpu_inner_kind, s.group_names()])
+	syn.set_arch(SyntheticStatSource.DEFAULT_ARCH)
 

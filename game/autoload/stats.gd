@@ -8,7 +8,8 @@ signal source_changed(name: String)
 
 const HISTORY_LEN := 360  # 3 minutes at 500 ms
 ## cpu_perf and cpu_eff hold the outer and inner ring groups (see
-## StatSample.group_names): P and E on Apple Silicon.
+## StatSample.group_names): P and E on Apple Silicon, each core's first
+## and second thread under SMT.
 const HISTORY_KEYS := ["cpu_total", "cpu_perf", "cpu_eff", "mem_used", "net_rx_bps", "net_tx_bps", "load1", "load5", "load15"]
 
 ## The fast readings (CPU, network) move like a needle with inertia: a
@@ -44,6 +45,14 @@ var _vel_tx := 0.0
 func _ready() -> void:
 	for key in HISTORY_KEYS:
 		history[key] = History.new(HISTORY_LEN)
+	# `-- --arch=<name>` shows a synthetic machine of that architecture
+	# (SyntheticStatSource.ARCHS) instead of this one.
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--arch="):
+			var syn := SyntheticStatSource.new()
+			syn.set_arch(arg.trim_prefix("--arch="))
+			use(syn)
+			return
 	var helper := HelperStatSource.new()
 	helper.failed.connect(_on_helper_failed)
 	use(helper)
@@ -87,6 +96,8 @@ func _on_sample(s: StatSample) -> void:
 
 ## The outer (perf) or inner (eff) group, split as core_ring splits it:
 ## on cpu_inner_cores, which is the E-cores wherever there are any.
+## Under SMT a group is a thread of every core, so the two means together
+## are the machine's per-thread load.
 static func _group_mean(s: StatSample, perf: bool) -> float:
 	var n := s.cpu_cores.size()
 	var inner := clampi(s.cpu_inner_cores, 0, n)
@@ -161,6 +172,8 @@ func _process(dt: float) -> void:
 	smooth.cpu_perf_cores = raw.cpu_perf_cores
 	smooth.cpu_eff_cores = raw.cpu_eff_cores
 	smooth.cpu_inner_cores = raw.cpu_inner_cores
+	smooth.cpu_inner_kind = raw.cpu_inner_kind
+	smooth.cpu_threads = raw.cpu_threads
 	smooth.mem_total = raw.mem_total
 	smooth.mem_wired = raw.mem_wired
 	smooth.mem_free = raw.mem_free

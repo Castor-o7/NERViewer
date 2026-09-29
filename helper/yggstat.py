@@ -11,20 +11,52 @@
 #
 # How each field maps onto Linux (macOS source in brackets):
 #
-#   cpu.cores    One value per physical core, from /proc/stat per-cpu jiffy
-#                deltas: a core's SMT threads merge as 1 - prod(idle share),
+#   cpu          The values the core rings show, and what they are. The
+#                inner ring shows the first `inner` values, the outer ring
+#                the rest; `inner_kind` says what the inner ring holds:
+#
+#     kind     when                         cores (inner first)       perf        eff      inner
+#     eff      hybrid Intel (cpu_core and   E-cores, then P-cores,    P-cores     E-cores  eff
+#              cpu_atom), or ARM big.LITTLE one per physical core
+#              (cpu_capacity differs)
+#     cluster  2+ last-level-cache clusters the preferred cluster,    physical    0        its cores
+#              (Ryzen CCDs, Threadripper)   then the rest, per core   cores
+#     smt      one cluster, every core has  each core's second        physical    0        physical
+#              an SMT sibling               thread(s), then each      cores                cores
+#                                           core's first thread
+#     none     one cluster, no SMT          one per physical core     physical    0        0
+#
+#                So len(cores) == perf + eff, plus inner when the kind is
+#                smt: the only kind where a value is a thread, not a core.
+#                perf + eff is always the physical core count. Everywhere
+#                but smt a core's SMT threads merge as 1 - prod(idle share),
 #                the chance at least one of them was busy, so an SMT core
-#                reads like an Apple core. [host_processor_info]
-#   cpu.perf/eff Physical cores. On a hybrid Intel part (/sys/devices/cpu_core
-#                and cpu_atom both present) the E-cores come first, as they do
-#                on Apple Silicon, and the counts are theirs. Otherwise every
-#                core is a "perf" core and eff = 0. [hw.perflevel*.logicalcpu]
-#   cpu.inner    How many cores, from the front, the inner ring shows: the
-#                E-cores; else, on a CPU of several last-level-cache clusters
-#                (Ryzen CCDs), the cluster holding the scheduler's preferred
-#                core, which carries the light load as the E-cluster does on
-#                Apple Silicon; else 0. [absent on macOS: = eff]
-#   load         os.getloadavg(). [getloadavg]
+#                reads like an Apple core. Values come from /proc/stat
+#                per-cpu jiffy deltas. [host_processor_info]
+#                  `total` is the mean over physical cores, SMT threads
+#                merged, in every kind: under smt the two values of a core
+#                are merged back before averaging, so the headline means
+#                the same on every CPU while the rings show threads.
+#                  The E-cores and the preferred cluster carry the light
+#                load as the E-cluster does on Apple Silicon; the preferred
+#                cluster is the one holding the scheduler's favourite core
+#                (amd_pstate prefcore ranking, else CPPC highest_perf).
+#                  macOS on Apple Silicon sends no inner/inner_kind: its
+#                cores are one per logical CPU (no SMT), perf/eff are
+#                hw.perflevel0/1.logicalcpu, and the reader takes inner =
+#                eff, kind eff. An Intel Mac sends kind smt or none, as
+#                here (see main.swift).
+#                  What the inner ring shows on a one-cluster SMT CPU is a
+#                choice: INNER_WHEN_SINGLE_CLUSTER below.
+#                  The topology is read under $YGGSTAT_SYSFS (default /sys),
+#                so test_topology.py can hand it fake machines.
+#                  `threads` is the logical CPU count, online ones: the
+#                load glyph's scale. [Apple Silicon sends none; the reader
+#                takes the value count, which is one per logical CPU there]
+#   load         os.getloadavg(), read against `threads` as uptime reads it.
+#                Linux counts tasks waiting on disk (D state) as load too;
+#                macOS counts runnable threads only. Deliberate: it is the
+#                kernel's own number on each. [getloadavg]
 #   mem.total    MemTotal. [hw.memsize]
 #   mem.used     MemTotal - MemAvailable: what the kernel says it could not
 #                hand to a new program without swapping. [wire+active+compressed]
@@ -122,8 +154,36 @@ def cpu_ticks():
 	return out
 
 
+## Where the CPU topology is read from. Only the topology: the fixtures in
+## test_topology.py are fake /sys trees holding just that.
+SYSFS = os.environ.get("YGGSTAT_SYSFS", "/sys")
+
+## What the inner ring shows on a CPU of one cache cluster, no E-cores:
+##   "smt"      (a) each core's second thread, the outer ring each core's
+##              first, so every logical CPU is on screen as itself. A CPU
+##              without SMT has nothing to put there: kind none, inner 0.
+##   "average"  (b) not built yet. The outer ring would show each physical
+##              core now, the inner ring the same cores' busy share over
+##              the last half minute or so, a slower hand on the same dial.
+##              To build it: core_order returns (cores, n, 0, n, "average")
+##              for the physical cores; sample() keeps an exponential mean
+##              per core of cpu_util's values and sends mean + now, so
+##              len(cores) == perf + eff + inner holds for it as for smt
+##              (widen that rule in build.sh and stats_probe.gd); and
+##              StatSample.group_names gives the pair a name of its own.
+## Anything else, "average" included until it is built, reads as "none".
+## (a) was chosen on 2026-09-29; (b) is kept in case per-thread rings stop
+## reading as the machine's load.
+INNER_WHEN_SINGLE_CLUSTER = "smt"
+
+## ARM big.LITTLE: cores whose cpu_capacity is below this share of the
+## biggest are efficiency cores. x86 reports 1024 everywhere, or close to
+## it where a kernel scales capacity by boost rank, so it never trips.
+CAPACITY_SPLIT = 0.8
+
+
 def _cpu_sys(c, leaf):
-	return read("/sys/devices/system/cpu/cpu%d/%s" % (c, leaf))
+	return read("%s/devices/system/cpu/cpu%d/%s" % (SYSFS, c, leaf))
 
 
 def _rank(c):
@@ -137,23 +197,51 @@ def _rank(c):
 	return 0
 
 
-def core_order():
-	"""Physical cores in display order, each a tuple of its logical CPUs
-	(SMT siblings), and the (perf, eff, inner) counts in physical cores."""
-	present = sorted(cpu_ticks().keys())
+def _little_cores(cores):
+	"""The physical cores of the lowest cpu_capacity class, when capacities
+	differ enough to call them efficiency cores (ARM big.LITTLE, DynamIQ);
+	else []. On three tiers (prime, big, little) only the little ones."""
+	caps = {}
+	for k in cores:
+		try:
+			caps[k] = int(_cpu_sys(k[0], "cpu_capacity").strip())
+		except ValueError:
+			return []  # unknown for some core: no claim either way
+	if not caps:
+		return []
+	lo, hi = min(caps.values()), max(caps.values())
+	if hi <= 0 or lo >= hi * CAPACITY_SPLIT:
+		return []
+	return [k for k in cores if caps[k] < lo * 1.1]
+
+
+def core_order(present=None):
+	"""What the rings show, as (slots, perf, eff, inner, kind): slots in
+	display order, inner ring first, each a tuple of logical CPUs whose busy
+	shares merge into one value; the rest is the contract in the header.
+	`present` is the online CPUs, from /proc/stat unless given."""
+	if present is None:
+		present = sorted(cpu_ticks().keys())
 	cores, seen = [], set()
 	for c in present:
 		if c in seen:
 			continue
 		sib = [x for x in parse_cpulist(_cpu_sys(c, "topology/thread_siblings_list")) if x in present] or [c]
+		sib = sorted(set(sib) | {c})
 		seen.update(sib)
-		cores.append(tuple(sorted(sib)))
-	p_cpus = parse_cpulist(read("/sys/devices/cpu_core/cpus"))
-	e_cpus = set(parse_cpulist(read("/sys/devices/cpu_atom/cpus")))
+		cores.append(tuple(sib))
+	# E-cores first, as on Apple Silicon: hybrid Intel names its own, ARM
+	# says it through capacity.
+	p_cpus = parse_cpulist(read(SYSFS + "/devices/cpu_core/cpus"))
+	e_cpus = set(parse_cpulist(read(SYSFS + "/devices/cpu_atom/cpus")))
 	if p_cpus and e_cpus:
 		e = [k for k in cores if k[0] in e_cpus]
-		p = [k for k in cores if k[0] not in e_cpus]
-		return e + p, len(p), len(e), len(e)
+	else:
+		e = _little_cores(cores)
+	if e:
+		p = [k for k in cores if k not in e]
+		if p:
+			return e + p, len(p), len(e), len(e), "eff"
 	# No E-cores: the clusters that share a last-level cache. The one
 	# holding the scheduler's preferred core goes first, on the inner ring.
 	clusters = {}
@@ -161,18 +249,21 @@ def core_order():
 		key = _cpu_sys(k[0], "cache/index3/shared_cpu_list").strip() or _cpu_sys(k[0], "topology/die_id").strip()
 		clusters.setdefault(key, []).append(k)
 	groups = list(clusters.values())
-	if len(groups) < 2:
-		return cores, len(cores), 0, 0
-	first = max(groups, key=lambda g: (max(_rank(c) for k in g for c in k), -g[0][0]))
-	rest = [k for k in cores if k not in first]
-	return first + rest, len(cores), 0, len(first)
+	if len(groups) >= 2:
+		first = max(groups, key=lambda g: (max(_rank(c) for k in g for c in k), -g[0][0]))
+		rest = [k for k in cores if k not in first]
+		return first + rest, len(cores), 0, len(first), "cluster"
+	# One cluster. The switch point between (a) and (b): see above.
+	if INNER_WHEN_SINGLE_CLUSTER == "smt" and cores and all(len(k) >= 2 for k in cores):
+		return [k[1:] for k in cores] + [k[:1] for k in cores], len(cores), 0, len(cores), "smt"
+	return cores, len(cores), 0, 0, "none"
 
 
-ORDER, PERF, EFF, INNER = core_order()
+ORDER, PERF, EFF, INNER, KIND = core_order()
 
 
 def cpu_util(prev, cur):
-	"""Busy share per physical core: 1 - prod(idle share of its threads)."""
+	"""Busy share per slot of ORDER: 1 - prod(idle share of its CPUs)."""
 	out = []
 	for core in ORDER:
 		idle_all = 1.0
@@ -183,6 +274,17 @@ def cpu_util(prev, cur):
 			idle_all *= max(0.0, min(1.0, (n[0] - p[0]) / (n[1] - p[1])))
 		out.append(1.0 - idle_all)
 	return out
+
+
+def cpu_total(cores, kind, inner):
+	"""The headline total: the mean over physical cores, SMT threads merged,
+	in every kind. Under smt value i (a core's second thread) and value
+	i + inner (its first) are one core, and 1 - (1-a)(1-b) is exactly the
+	product of idle shares the unsplit core would have given, so a 6c/12t
+	CPU with every core busy reads full, as it does in the other kinds."""
+	if kind == "smt" and inner and len(cores) >= 2 * inner:
+		return sum(1.0 - (1.0 - cores[i]) * (1.0 - cores[i + inner]) for i in range(inner)) / inner
+	return sum(cores) / len(cores) if cores else 0.0
 
 
 # MARK: - Memory
@@ -328,7 +430,7 @@ prev_time = time.time()
 
 
 def sample():
-	global prev_ticks, prev_net, prev_time, ORDER, PERF, EFF, INNER
+	global prev_ticks, prev_net, prev_time, ORDER, PERF, EFF, INNER, KIND
 	now = time.time()
 	dt = max(now - prev_time, 0.001)
 
@@ -337,10 +439,10 @@ def sample():
 		# A CPU came online or went offline (SMT toggled, hotplug): the
 		# cores and clusters are read again, so none is shown as idle
 		# while it is gone and a returning one is counted.
-		ORDER, PERF, EFF, INNER = core_order()
+		ORDER, PERF, EFF, INNER, KIND = core_order()
 	cores = cpu_util(prev_ticks, ticks)
 	prev_ticks = ticks
-	total = sum(cores) / len(cores) if cores else 0.0
+	total = cpu_total(cores, KIND, INNER)
 
 	try:
 		load = os.getloadavg()
@@ -374,7 +476,7 @@ def sample():
 		uptime = 0.0
 
 	return ('{"t":%s,' % fmt(now)
-		+ '"cpu":{"cores":[%s],"total":%s,"perf":%d,"eff":%d,"inner":%d},' % (",".join(fmt(c) for c in cores), fmt(total), PERF, EFF, INNER)
+		+ '"cpu":{"cores":[%s],"total":%s,"perf":%d,"eff":%d,"inner":%d,"inner_kind":"%s","threads":%d},' % (",".join(fmt(c) for c in cores), fmt(total), PERF, EFF, INNER, KIND, len(ticks))
 		+ '"load":[%s,%s,%s],' % (fmt(load[0], 2), fmt(load[1], 2), fmt(load[2], 2))
 		+ '"mem":{"total":%d,"used":%d,"wired":%d,' % (mem_total, used, wired)
 		+ '"compressed":%d,"free":%d,"pressure":%s},' % (compressed, free, fmt(pressure))

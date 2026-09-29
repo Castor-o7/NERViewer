@@ -3,7 +3,8 @@ extends Node2D
 ## the window scales; the ground is the palette's ground color; a quiet
 ## status line says where the numbers come from.
 ##
-## Keys: Tab cycles synthetic scenarios, P cycles the palettes,
+## Keys: Tab cycles synthetic scenarios, A the synthetic architectures
+## (the core glyph as another CPU would draw it), P cycles the palettes,
 ## M toggles minimalist mode (the sigil alone), B toggles desktop mode
 ## (no ground, no border, floating on the desktop), S saves a screenshot
 ## beside the project, G cycles the smoked-glass backing behind each panel
@@ -380,6 +381,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		KEY_TAB:
 			if Stats.source is SyntheticStatSource:
 				Stats.source.next_scenario()
+		KEY_A:
+			if Stats.source is SyntheticStatSource:
+				Stats.source.next_arch()
 		KEY_P:
 			Palette.next()
 		KEY_M:
