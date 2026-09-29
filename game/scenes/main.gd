@@ -57,6 +57,7 @@ var docked := false
 ## cockpit's dock file cannot shrink their frame.
 var dockable := true
 var _dock_text := ""
+var _dock_program := ""
 ## The cockpit that wrote the dock file, watched while docked (Linux).
 var _dock_pid := 0
 var _dock_timer := DOCK_POLL
@@ -227,12 +228,15 @@ func _process(dt: float) -> void:
 func _poll_dock() -> void:
 	if not dockable:
 		return
-	var text := FileAccess.get_file_as_string(DOCK_FILE) if FileAccess.file_exists(DOCK_FILE) else ""
+	var exists := FileAccess.file_exists(DOCK_FILE)
+	var text := FileAccess.get_file_as_string(DOCK_FILE) if exists else ""
+	if exists and text.strip_edges().is_empty():
+		return  # caught mid-write (a cockpit from before the atomic rename)
 	if text == _dock_text:
 		# A cockpit that crashed or was killed leaves its file behind
 		# unchanged, and the sigil would float on top of an empty desktop.
 		# On Linux the /proc check is cheap enough to make every poll.
-		if not (OS.get_name() == "Linux" and docked and _dock_pid > 0 and not _pid_alive(_dock_pid)):
+		if not (OS.get_name() == "Linux" and docked and _dock_pid > 0 and not _pid_alive(_dock_pid, _dock_program)):
 			return
 	_dock_text = text
 	if text.is_empty():
@@ -246,7 +250,8 @@ func _poll_dock() -> void:
 	var rect = cfg.get_value("dock", "rect", null)
 	var pid := int(cfg.get_value("dock", "pid", 0))
 	_dock_pid = pid
-	if pid > 0 and not _pid_alive(pid):
+	_dock_program = str(cfg.get_value("dock", "program", ""))
+	if pid > 0 and not _pid_alive(pid, _dock_program):
 		# The cockpit died without cleaning up; the file is stale.
 		set_docked(false, Rect2i())
 		return
@@ -260,11 +265,23 @@ func _poll_dock() -> void:
 ## OS.is_process_running answers only for its own children (it is waitpid
 ## underneath, and logs an error and reports any other pid as gone;
 ## verified on Linux 2026-09-28), so on Linux the cockpit would always look
-## dead and the piece would never dock. /proc answers for every process.
+## dead and the piece would never dock. /proc answers for every process,
+## and its command line must still name the cockpit's program (newer
+## cockpits write it), so a pid recycled after a crash does not count.
+## Read through a handle: proc files report a length of 0.
 ## macOS keeps the call it always had.
-static func _pid_alive(pid: int) -> bool:
+static func _pid_alive(pid: int, program: String = "") -> bool:
 	if OS.get_name() == "Linux":
-		return DirAccess.dir_exists_absolute("/proc/%d" % pid)
+		var f := FileAccess.open("/proc/%d/cmdline" % pid, FileAccess.READ)
+		if f == null:
+			return false
+		if program.is_empty():
+			return true
+		var raw := f.get_buffer(4096)
+		for i in raw.size():
+			if raw[i] == 0:
+				raw[i] = 32  # argv is NUL-separated
+		return program in raw.get_string_from_utf8()
 	return OS.is_process_running(pid)
 
 
