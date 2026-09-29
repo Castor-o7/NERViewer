@@ -96,9 +96,13 @@ const THEMES: Dictionary[String, Dictionary] = {
 var theme_name := "yggdrasil"
 
 ## The one face for every label: a thin condensed sans, uppercase and
-## letterspaced, from the system (Avenir Next Condensed; macOS only, as is
-## everything else). Labels get it through the project theme; drawn text
-## takes it from here. DISPLAY is the ultra-light cut for large numerals.
+## letterspaced, from the system: Avenir Next Condensed on macOS. Linux has
+## no Avenir, so the SystemFont lists fallbacks after it, tried in order:
+## Nimbus Sans Narrow (a condensed grotesque) for labels, the ExtraLight
+## and Thin cuts of Source Sans 3 and Noto Sans for display numerals, and
+## DejaVu Sans Condensed last because every desktop has it. Labels get it
+## through the project theme; drawn text takes it from here. DISPLAY is
+## the ultra-light cut for large numerals.
 const FONT: Font = preload("res://fonts/ui.tres")
 const DISPLAY: Font = preload("res://fonts/display.tres")
 

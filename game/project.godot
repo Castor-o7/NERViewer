@@ -25,9 +25,11 @@ Stats="*res://autoload/stats.gd"
 
 window/size/viewport_width=1440
 window/size/viewport_height=900
+window/hdr/request_hdr_output=true
 window/stretch/mode="canvas_items"
 window/per_pixel_transparency/allowed=true
-window/hdr/request_hdr_output=true
+display_server/driver.linuxbsd="x11"
+window/hdr/request_hdr_output.linuxbsd=false
 
 [gui]
 
@@ -36,5 +38,5 @@ theme/custom_font="res://fonts/ui.tres"
 [rendering]
 
 textures/vram_compression/import_etc2_astc=true
-viewport/transparent_background=true
 viewport/hdr_2d=true
+viewport/transparent_background=true

@@ -4,3 +4,4 @@ screenshots/
 .DS_Store
 
 dist/
+__pycache__/

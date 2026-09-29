@@ -1,7 +1,7 @@
 [gd_resource type="FontVariation" load_steps=2 format=3]
 
 [sub_resource type="SystemFont" id="sys"]
-font_names = PackedStringArray("Avenir Next Condensed")
+font_names = PackedStringArray("Avenir Next Condensed", "Source Sans 3", "Noto Sans", "DejaVu Sans Condensed")
 font_weight = 100
 subpixel_positioning = 1
 

@@ -2,7 +2,10 @@ class_name HelperStatSource
 extends StatSource
 ## Spawns yggstat and reads one JSON sample per line off a thread.
 ## Phase 1 builds the helper; until then this fails on start and Stats
-## falls back to the synthetic source.
+## falls back to the synthetic source. On macOS yggstat is the compiled
+## Swift helper; on Linux it is helper/yggstat.py, copied without its
+## extension and made executable by helper/build.sh, so the path and the
+## JSON are the same on both.
 
 const HELPER := "res://bin/yggstat"
 const INTERVAL_MS := 500
@@ -17,7 +20,8 @@ func source_name() -> String:
 
 
 ## In the editor the helper sits in the project's bin/. In an exported
-## app it sits beside the executable, inside Contents/MacOS.
+## app it sits beside the executable: inside Contents/MacOS on macOS,
+## beside NERViewer.x86_64 in dist/linux on Linux.
 static func helper_path() -> String:
 	var beside_exe := OS.get_executable_path().get_base_dir().path_join("yggstat")
 	if FileAccess.file_exists(beside_exe):
@@ -44,7 +48,9 @@ func _read_loop() -> void:
 	while _running and pipe.is_open():
 		var line := pipe.get_line()
 		if line.is_empty():
-			if pipe.eof_reached():
+			# A pipe's end is never eof_reached() in Godot 4.7: get_line()
+			# returns "" and get_error() goes to ERR_FILE_CANT_READ.
+			if pipe.eof_reached() or pipe.get_error() != OK:
 				break
 			OS.delay_msec(10)
 			continue
