@@ -44,7 +44,7 @@ const FPS_AWAKE := 30
 const FPS_MINIMIZED := 3
 const DESIGN := Vector2i(1440, 900)
 const DOCK_FILE := "user://dock.cfg"
-const DOCK_POLL := 1.0
+const DOCK_POLL := 0.2
 ## Design units of the square the sigil fills when docked: the scale ring
 ## sits at radius 236, the core halo a little past it.
 const DOCK_DIAMETER := 520
@@ -56,8 +56,7 @@ var docked := false
 ## Tools that render the piece set this off before adding it, so a live
 ## cockpit's dock file cannot shrink their frame.
 var dockable := true
-var _dock_mtime := -1
-var _dock_size := -1
+var _dock_text := ""
 ## The cockpit that wrote the dock file, watched while docked (Linux).
 var _dock_pid := 0
 var _dock_timer := DOCK_POLL
@@ -218,36 +217,37 @@ func _process(dt: float) -> void:
 		Engine.max_fps = want
 
 
-## Docking. The file is polled once a second; its modified time and size
-## are the only things compared, so rewriting the same rect costs nothing.
-## The size is there for `hidden`: mtime has one-second resolution, and a
-## stow that lands in the same second as a move would otherwise be missed
-## ("true" and "false" differ by a byte).
+## Docking. The file is polled five times a second and its whole text is
+## compared with the last one read, so rewriting the same rect costs
+## nothing. Comparing mtime and size was not enough: mtime has one-second
+## resolution, and two rects of the same length written within one second
+## (a mid-ease rect, then the final one) left the sigil off its disc. The
+## file is a few hundred bytes; reading it outright is cheaper than a stat
+## was worth.
 func _poll_dock() -> void:
 	if not dockable:
 		return
-	var mtime := FileAccess.get_modified_time(DOCK_FILE) if FileAccess.file_exists(DOCK_FILE) else 0
-	var size := FileAccess.get_size(DOCK_FILE) if mtime != 0 else 0
-	if mtime == _dock_mtime and size == _dock_size:
+	var text := FileAccess.get_file_as_string(DOCK_FILE) if FileAccess.file_exists(DOCK_FILE) else ""
+	if text == _dock_text:
 		# A cockpit that crashed or was killed leaves its file behind
 		# unchanged, and the sigil would float on top of an empty desktop.
 		# On Linux the /proc check is cheap enough to make every poll.
 		if not (OS.get_name() == "Linux" and docked and _dock_pid > 0 and not _pid_alive(_dock_pid)):
 			return
-	_dock_mtime = mtime
-	_dock_size = size
-	if mtime == 0:
+	_dock_text = text
+	if text.is_empty():
 		set_docked(false, Rect2i())
 		return
 	var cfg := ConfigFile.new()
-	if cfg.load(DOCK_FILE) != OK:
+	if cfg.parse(text) != OK:
+		# Caught mid-write; the next poll reads it whole.
+		_dock_text = ""
 		return
 	var rect = cfg.get_value("dock", "rect", null)
 	var pid := int(cfg.get_value("dock", "pid", 0))
 	_dock_pid = pid
 	if pid > 0 and not _pid_alive(pid):
 		# The cockpit died without cleaning up; the file is stale.
-		_dock_mtime = -1
 		set_docked(false, Rect2i())
 		return
 	if rect is Rect2i and rect.size.x > 0 and rect.size.y > 0:
