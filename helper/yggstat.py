@@ -57,7 +57,11 @@
 #                Linux counts tasks waiting on disk (D state) as load too;
 #                macOS counts runnable threads only. Deliberate: it is the
 #                kernel's own number on each. [getloadavg]
-#   mem.total    MemTotal. [hw.memsize]
+#   mem.total    Installed RAM: the online memory blocks under
+#                /sys/devices/system/memory, as hw.memsize counts it; the
+#                firmware's and kernel's reserve is neither used nor free,
+#                as there. MemTotal when the blocks are not readable.
+#                [hw.memsize]
 #   mem.used     MemTotal - MemAvailable: what the kernel says it could not
 #                hand to a new program without swapping. [wire+active+compressed]
 #   mem.wired    Memory the kernel cannot page out: Unevictable (which already
@@ -69,29 +73,42 @@
 #                [compressor_page_count]
 #   mem.free     MemFree: pages holding nothing at all, like macOS's free +
 #                speculative. Cache is neither used nor free here, as there.
-#   mem.pressure PSI, /proc/pressure/memory "some avg10": the share of the last
-#                ten seconds in which at least one task stalled on memory.
-#                It is 0 on a healthy machine and a few percent is already
-#                felt, so it is shown as 2*sqrt(share), clamped to 0..1:
-#                1% stall reads 0.2, 6% reads 0.5, 25% and up reads 1. Without
-#                PSI (kernel built without it) 1 - MemAvailable/MemTotal
-#                stands in. [1 - kern.memorystatus_level/100]
+#   mem.pressure 1 - MemAvailable/MemTotal, the resting level, as the Mac's
+#                is 1 - (free + pageable + purgeable)/total: a healthy machine
+#                rests around 0.2-0.5 on both. PSI raises it: /proc/pressure/
+#                memory "some avg10", the share of the last ten seconds in
+#                which a task stalled on memory, is 0 when healthy and a few
+#                percent is already felt, so it counts as 2*sqrt(share)
+#                (1% stall 0.2, 6% 0.5, 25% and up 1) and the higher of the
+#                two is sent, clamped to 0..1. [1 - kern.memorystatus_level/100]
 #   net          /proc/net/dev byte counters, per-interface deltas, summed
 #                over interfaces backed by hardware (/sys/class/net/X/device),
 #                so bridge, veth and tunnel traffic is not counted twice; if
 #                there are none, every interface but lo. [ifmib, all but lo0]
-#   thermal      The CPU package sensor (k10temp Tctl/Tdie, zenpower Tdie,
+#   thermal      The CPU package sensor (k10temp Tdie/Tctl, zenpower Tdie,
 #                coretemp Package id 0, else an x86_pkg_temp or cpu thermal
 #                zone), in tiers: 0 below 70 C, 1 from 70, 2 from 85, 3 from
 #                95 (or, when the sensor reports a crit, from crit-5, and 2
-#                from crit-15). A tier only drops once the temperature is 3 C
-#                below its threshold, so the frame does not flicker on a
-#                boundary. No sensor: 0. [ProcessInfo.thermalState]
-#   uptime       /proc/uptime, first field. [systemUptime]
+#                from crit-15). An AMD package without a crit (k10temp,
+#                zenpower) runs up to its Tjmax under ordinary load by
+#                design, so there the tiers follow Tjmax (tj-10, tj, tj+5):
+#                serious means it has reached Tjmax and throttles, critical
+#                that it has gone past, as the Mac means them. Tjmax from
+#                /proc/cpuinfo: 90 C (Zen 1-3 desktop, the 5900X), 95 C
+#                (Zen 4 and later, family 0x19 model 0x60+ or 0x1a+), 100 C
+#                for a mobile part (U/H/HS/HX, Ryzen AI). Tdie before Tctl,
+#                since Tctl carries a +10/+20 C offset on Zen 1 X parts. A
+#                tier only drops once the temperature is 3 C below its
+#                threshold, so the frame does not flicker on a boundary. No
+#                sensor: 0. [ProcessInfo.thermalState]
+#   uptime       CLOCK_MONOTONIC: time awake since boot, suspend excluded,
+#                as the Mac's is (/proc/uptime would count the night the
+#                machine slept). [systemUptime]
 
 import glob
 import json
 import os
+import re
 import signal
 import sys
 import time
@@ -314,6 +331,27 @@ def zram_bytes():
 	return total
 
 
+## Online memory blocks under this sysfs root, in bytes: installed RAM.
+def installed_ram(sysfs="/sys"):
+	try:
+		block = int(read(sysfs + "/devices/system/memory/block_size_bytes").strip(), 16)
+	except ValueError:
+		return 0
+	n = sum(1 for p in glob.glob(sysfs + "/devices/system/memory/memory*/online") if read(p).strip() == "1")
+	return block * n
+
+
+INSTALLED = installed_ram()
+
+
+def mem_pressure(mem_total, avail, psi):
+	"""The Mac's resting level (occupancy), raised by PSI stalls; 0..1."""
+	pressure = 1.0 - avail / mem_total if mem_total else 0.0
+	if psi is not None:
+		pressure = max(pressure, 2.0 * (max(psi, 0.0) / 100.0) ** 0.5)
+	return max(0.0, min(1.0, pressure))
+
+
 def psi_some_avg10():
 	"""Percent, or None without PSI."""
 	for line in read("/proc/pressure/memory").splitlines():
@@ -362,15 +400,20 @@ def net_rate(prev, cur, dt):
 
 # MARK: - Thermal
 
-def find_cpu_sensor():
-	"""(input path, crit in C or None) for the CPU package, else (None, None)."""
+## AMD package drivers: no crit, and Tjmax (amd_tjmax) is where the part sits at work.
+AMD_SENSORS = ("k10temp", "zenpower")
+
+
+def find_cpu_sensor(sysfs="/sys"):
+	"""(input path, crit in C or None, driver name) for the CPU package,
+	else (None, None, None)."""
 	wanted = {
-		"k10temp": ("Tctl", "Tdie"),
+		"k10temp": ("Tdie", "Tctl"),
 		"zenpower": ("Tdie", "Tctl"),
 		"coretemp": ("Package id 0",),
 		"cpu_thermal": (None,),
 	}
-	for hw in sorted(glob.glob("/sys/class/hwmon/hwmon*")):
+	for hw in sorted(glob.glob(sysfs + "/class/hwmon/hwmon*")):
 		name = read(hw + "/name").strip()
 		if name not in wanted:
 			continue
@@ -381,19 +424,50 @@ def find_cpu_sensor():
 				inp = lab[:-len("_label")] + "_input"
 				if os.path.exists(inp):
 					crit = read(lab[:-len("_label")] + "_crit").strip()
-					return inp, (int(crit) / 1000.0 if crit.isdigit() and int(crit) > 0 else None)
-	for zone in sorted(glob.glob("/sys/class/thermal/thermal_zone*")):
+					return inp, (int(crit) / 1000.0 if crit.isdigit() and int(crit) > 0 else None), name
+	for zone in sorted(glob.glob(sysfs + "/class/thermal/thermal_zone*")):
 		t = read(zone + "/type").strip().lower()
 		if t in ("x86_pkg_temp", "cpu-thermal", "cpu_thermal", "soc_thermal"):
-			return zone + "/temp", None
-	return None, None
+			return zone + "/temp", None, t
+	return None, None, None
 
 
-SENSOR, CRIT = find_cpu_sensor()
-if CRIT:
-	THRESHOLDS = (min(70.0, CRIT - 25.0), CRIT - 15.0, CRIT - 5.0)
-else:
-	THRESHOLDS = (70.0, 85.0, 95.0)
+def amd_tjmax(cpuinfo="/proc/cpuinfo"):
+	"""An AMD part's Tjmax in C, from its family, model and name: 90 for
+	Zen 1-3 desktop parts, 95 for Zen 4 and later, 100 for a mobile part
+	(most run 100-105). A rough table, but tiers only need the right side
+	of normal; anything unreadable counts as 90."""
+	fam = mod = -1
+	name = ""
+	for line in read(cpuinfo).splitlines():
+		k, _, v = line.partition(":")
+		k, v = k.strip(), v.strip()
+		if k == "cpu family" and fam < 0 and v.isdigit():
+			fam = int(v)
+		elif k == "model" and mod < 0 and v.isdigit():
+			mod = int(v)
+		elif k == "model name" and not name:
+			name = v
+		elif not line.strip() and fam >= 0:
+			break               # the first processor says it for all
+	if re.search(r"\b\d{4}(U|H|HS|HX)\b|Ryzen AI", name):
+		return 100.0
+	if fam >= 0x1a or (fam == 0x19 and mod >= 0x60):
+		return 95.0
+	return 90.0
+
+
+def thresholds(crit, name, tj=90.0):
+	"""The temperatures tiers 1, 2 and 3 start at."""
+	if crit:
+		return (min(70.0, crit - 25.0), crit - 15.0, crit - 5.0)
+	if name in AMD_SENSORS:
+		return (tj - 10.0, tj, tj + 5.0)
+	return (70.0, 85.0, 95.0)
+
+
+SENSOR, CRIT, SENSOR_NAME = find_cpu_sensor()
+THRESHOLDS = thresholds(CRIT, SENSOR_NAME, amd_tjmax() if SENSOR_NAME in AMD_SENSORS else 90.0)
 HYSTERESIS = 3.0
 _tier = 0
 
@@ -453,32 +527,25 @@ def sample():
 	mem_total = m.get("MemTotal", 0)
 	avail = m.get("MemAvailable", m.get("MemFree", 0))
 	used = max(0, mem_total - avail)
+	installed = max(INSTALLED, mem_total)
 	wired = (m.get("Unevictable", 0) + m.get("SUnreclaim", 0)
 		+ m.get("KernelStack", 0) + m.get("PageTables", 0) + m.get("SecPageTables", 0))
 	wired = min(wired, used)
 	compressed = m.get("Zswap", 0) + zram_bytes()
 	free = m.get("MemFree", 0)
-	psi = psi_some_avg10()
-	if psi is None:
-		pressure = 1.0 - avail / mem_total if mem_total else 0.0
-	else:
-		pressure = 2.0 * (psi / 100.0) ** 0.5
-	pressure = max(0.0, min(1.0, pressure))
+	pressure = mem_pressure(mem_total, avail, psi_some_avg10())
 
 	net = net_bytes()
 	rx_bps, tx_bps = net_rate(prev_net, net, dt)
 	prev_net = net
 	prev_time = now
 
-	try:
-		uptime = float(read("/proc/uptime").split()[0])
-	except (IndexError, ValueError):
-		uptime = 0.0
+	uptime = time.clock_gettime(time.CLOCK_MONOTONIC)
 
 	return ('{"t":%s,' % fmt(now)
 		+ '"cpu":{"cores":[%s],"total":%s,"perf":%d,"eff":%d,"inner":%d,"inner_kind":"%s","threads":%d},' % (",".join(fmt(c) for c in cores), fmt(total), PERF, EFF, INNER, KIND, len(ticks))
 		+ '"load":[%s,%s,%s],' % (fmt(load[0], 2), fmt(load[1], 2), fmt(load[2], 2))
-		+ '"mem":{"total":%d,"used":%d,"wired":%d,' % (mem_total, used, wired)
+		+ '"mem":{"total":%d,"used":%d,"wired":%d,' % (installed, used, wired)
 		+ '"compressed":%d,"free":%d,"pressure":%s},' % (compressed, free, fmt(pressure))
 		+ '"net":{"rx_bps":%s,"tx_bps":%s},' % (fmt(max(0.0, rx_bps), 1), fmt(max(0.0, tx_bps), 1))
 		+ '"thermal":%d,' % thermal()

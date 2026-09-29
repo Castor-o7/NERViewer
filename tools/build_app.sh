@@ -10,8 +10,15 @@ cd "$(dirname "$0")/.."
 
 case "$(uname)" in
   Darwin)
-    GODOT=${GODOT:-/Applications/Godot.app/Contents/MacOS/Godot}
-    command -v godot >/dev/null 2>&1 && GODOT=godot
+    # An explicit GODOT=... wins; else godot on PATH, else the app.
+    [ -n "$GODOT" ] || { command -v godot >/dev/null 2>&1 && GODOT=godot || GODOT=/Applications/Godot.app/Contents/MacOS/Godot; }
+    TPL="$HOME/Library/Application Support/Godot/export_templates"
+    VER=$("$GODOT" --version | sed -E 's/^([0-9]+\.[0-9]+(\.[0-9]+)?)\.([a-z0-9]+)\..*/\1.\3/')
+    if [ ! -f "$TPL/$VER/macos.zip" ]; then
+      echo "no macOS export template at $TPL/$VER/macos.zip"
+      echo "install the $VER templates (Godot: Editor > Manage Export Templates)"
+      exit 1
+    fi
 
     echo "-- helper"
     helper/build.sh

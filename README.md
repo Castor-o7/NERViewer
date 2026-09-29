@@ -16,8 +16,7 @@ export templates.
 ### Linux (KDE Plasma)
 
     tools/build_app.sh            # dist/linux/NERViewer.x86_64 + NERViewer.pck + yggstat
-    tools/launch_agent.sh install # systemd user unit edu.pdx.josh.nerviewer.service
-    systemctl --user start edu.pdx.josh.nerviewer.service
+    tools/launch_agent.sh install # systemd user unit edu.pdx.josh.nerviewer.service, started now
 
 Needs python3 (the stat helper, `helper/yggstat.py`, is a script: no
 compiler) and the Godot 4.7.2 Linux export templates
@@ -29,3 +28,22 @@ lets it stay on top and sit exactly where the cockpit docks it.
 
 For development, `helper/build.sh` puts the helper in `game/bin/` and
 `godot --path game` runs the piece.
+
+## Platform notes
+
+Same glyphs, same meaning on both; each number is the kernel's own, so a
+few read a shade differently.
+
+- LOAD is the load average over the logical CPUs, as `uptime` reads it:
+  the top line is every hardware thread busy (on Apple Silicon, every
+  core). Linux also counts tasks waiting on disk, macOS does not.
+- MEM's PRESSURE rests where the Mac's does, at the share of RAM the
+  kernel could not hand out without paging (1 - MemAvailable/MemTotal);
+  on Linux real stalls (PSI) push it higher. OF x GIB is installed RAM
+  on both.
+- The thermal frame follows macOS's own throttling verdict there. On
+  Linux it is the CPU package temperature in tiers; an AMD Ryzen runs up
+  to its Tjmax under ordinary load by design (90 C on a 5900X, 95 C on
+  Zen 4 and later, about 100 C on a laptop), so SERIOUS starts at Tjmax
+  and CRITICAL only past it.
+- UPTIME is time awake on both: a night asleep does not count.

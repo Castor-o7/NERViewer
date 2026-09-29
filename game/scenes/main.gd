@@ -270,7 +270,10 @@ func _poll_dock() -> void:
 ## and its command line must still name the cockpit's program (newer
 ## cockpits write it), so a pid recycled after a crash does not count.
 ## Read through a handle: proc files report a length of 0.
-## macOS keeps the call it always had.
+## macOS keeps the call it always had. That is waitpid (os_unix.cpp) and
+## sees no process but a child, so a Mac sigil does not dock yet; a
+## `/bin/ps -ww -p pid -o command=` check, off the main thread or cached
+## per pid, waits on a test on a Mac.
 static func _pid_alive(pid: int, program: String = "") -> bool:
 	if OS.get_name() == "Linux":
 		var f := FileAccess.open("/proc/%d/cmdline" % pid, FileAccess.READ)

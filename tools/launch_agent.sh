@@ -73,9 +73,8 @@ ExecStart="$APP"
 WantedBy=graphical-session.target
 UNIT
         systemctl --user daemon-reload
-        systemctl --user enable "$LABEL.service"
-        echo "installed: NERViewer will start with the desktop ($UNIT)"
-        echo "start it now with: systemctl --user start $LABEL.service"
+        systemctl --user enable --now "$LABEL.service"
+        echo "installed and started: NERViewer will start with the desktop ($UNIT)"
         ;;
       remove)
         systemctl --user disable --now "$LABEL.service" 2>/dev/null || true
