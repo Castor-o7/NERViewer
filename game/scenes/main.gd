@@ -302,6 +302,13 @@ func set_docked(on: bool, rect: Rect2i) -> void:
 		environment.environment.glow_enabled = false
 		Palette.halo = true
 		Palette.backing_alpha = 0.0
+		# Off the Mac: a hairline keeps its Mac weight in pixels at this
+		# dock's scale (hair 1.67 at 197 px). The Mac keeps 1.0.
+		# Only below the Mac's density: a dock as dense as a Retina one
+		# draws exactly as the Mac does, readouts and all.
+		var need := Palette.MAC_HAIR_PX * DOCK_DIAMETER / float(maxi(mini(rect.size.x, rect.size.y), 1))
+		Palette.lift = OS.get_name() != "macOS" and need > 1.0
+		Palette.hair = need if Palette.lift else 1.0
 		win.content_scale_size = Vector2i(DOCK_DIAMETER, DOCK_DIAMETER)
 		core_ring.position = Vector2(DOCK_DIAMETER, DOCK_DIAMETER) * 0.5
 		core_ring.scale = Vector2.ONE
@@ -312,6 +319,8 @@ func set_docked(on: bool, rect: Rect2i) -> void:
 	if not docked:
 		return
 	docked = false
+	Palette.lift = false
+	Palette.hair = 1.0
 	set_stowed(false)
 	win.content_scale_size = DESIGN
 	win.size = DESIGN

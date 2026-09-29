@@ -117,6 +117,16 @@ var backing_alpha := 0.0
 ## element also draws a soft echo of itself with real alpha.
 var halo := false
 
+## Docked off the Mac the sigil can land far below the Mac's pixel density
+## (197 px for 520 units on a 1080p screen: 0.379 px per unit, against
+## about 0.63 backing px on the Mac). A 1.0 hairline then falls between
+## pixel centres and drops out around the ring. `hair` is the width that
+## gives a hairline the Mac's weight in pixels again; `lift` says it is in
+## force. Set only by main.gd set_docked, never on macOS.
+const MAC_HAIR_PX := 0.631
+var hair := 1.0
+var lift := false
+
 
 ## Thermal tier from the latest sample. At serious and critical the frame
 ## color itself reddens: the whole piece changes mood, not one glyph.

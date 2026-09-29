@@ -16,7 +16,8 @@ func _draw() -> void:
 	var row_gap := 12.0
 	var row_h := (inner.size.y - row_gap) * 0.5
 	var col_w := inner.size.x / COLUMNS
-	var rows := [["P", "cpu_perf"], ["E", "cpu_eff"]]
+	var names := s.group_names()
+	var rows := [[names[0], "cpu_perf"], [names[1], "cpu_eff"]]
 	for r in 2:
 		var top := inner.position.y + r * (row_h + row_gap)
 		var base := top + row_h
@@ -46,15 +47,17 @@ func _draw() -> void:
 
 	draw_brackets(Palette.dim(frame, 0.85))
 	draw_ruler(h.y - 8.0, Palette.dim(frame, 0.35), 24)
-	draw_caption("CPU  60 S", "P %02d  E %02d" % [
-		int(round(_group_mean(s, true) * 99.0)), int(round(_group_mean(s, false) * 99.0))], frame, light)
+	draw_caption("CPU  60 S", "%s %02d  %s %02d" % [names[0],
+		int(round(_group_mean(s, true) * 99.0)), names[1], int(round(_group_mean(s, false) * 99.0))], frame, light)
 
 
+## The outer (perf) or inner (eff) group, split as core_ring splits it:
+## on cpu_inner_cores, which is the E-cores wherever there are any.
 static func _group_mean(s: StatSample, perf: bool) -> float:
 	var n := s.cpu_cores.size()
-	var eff := clampi(s.cpu_eff_cores, 0, n)
-	var from := eff if perf else 0
-	var to := n if perf else eff
+	var inner := clampi(s.cpu_inner_cores, 0, n)
+	var from := inner if perf else 0
+	var to := n if perf else inner
 	if to <= from:
 		return 0.0
 	var sum := 0.0

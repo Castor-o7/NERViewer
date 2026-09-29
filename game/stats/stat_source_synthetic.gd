@@ -82,6 +82,7 @@ func build(t: float) -> StatSample:
 	s.t = 1_757_444_000.0 + t
 	s.cpu_perf_cores = PERF
 	s.cpu_eff_cores = EFF
+	s.cpu_inner_cores = EFF
 	s.uptime = 812_345.0 + t
 	s.mem_total = 16 * GIB
 	s.load = Vector3(1.2, 1.4, 1.5)

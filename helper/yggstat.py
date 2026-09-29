@@ -11,12 +11,19 @@
 #
 # How each field maps onto Linux (macOS source in brackets):
 #
-#   cpu.cores    /proc/stat per-cpu jiffy deltas: busy = 1 - (idle+iowait)/all.
-#                [host_processor_info]
-#   cpu.perf/eff On a hybrid Intel part (/sys/devices/cpu_core and cpu_atom
-#                both present) the E-cores come first, as they do on Apple
-#                Silicon, and the counts are theirs. Otherwise every logical
-#                CPU is a "perf" core and eff = 0. [hw.perflevel*.logicalcpu]
+#   cpu.cores    One value per physical core, from /proc/stat per-cpu jiffy
+#                deltas: a core's SMT threads merge as 1 - prod(idle share),
+#                the chance at least one of them was busy, so an SMT core
+#                reads like an Apple core. [host_processor_info]
+#   cpu.perf/eff Physical cores. On a hybrid Intel part (/sys/devices/cpu_core
+#                and cpu_atom both present) the E-cores come first, as they do
+#                on Apple Silicon, and the counts are theirs. Otherwise every
+#                core is a "perf" core and eff = 0. [hw.perflevel*.logicalcpu]
+#   cpu.inner    How many cores, from the front, the inner ring shows: the
+#                E-cores; else, on a CPU of several last-level-cache clusters
+#                (Ryzen CCDs), the cluster holding the scheduler's preferred
+#                core, which carries the light load as the E-cluster does on
+#                Apple Silicon; else 0. [absent on macOS: = eff]
 #   load         os.getloadavg(). [getloadavg]
 #   mem.total    MemTotal. [hw.memsize]
 #   mem.used     MemTotal - MemAvailable: what the kernel says it could not
@@ -115,31 +122,66 @@ def cpu_ticks():
 	return out
 
 
+def _cpu_sys(c, leaf):
+	return read("/sys/devices/system/cpu/cpu%d/%s" % (c, leaf))
+
+
+def _rank(c):
+	"""How much the scheduler prefers this CPU: amd_pstate's preferred-core
+	ranking, else CPPC highest_perf, else 0 (no preference known)."""
+	for leaf in ("cpufreq/amd_pstate_prefcore_ranking", "acpi_cppc/highest_perf"):
+		try:
+			return int(_cpu_sys(c, leaf).strip())
+		except ValueError:
+			pass
+	return 0
+
+
 def core_order():
-	"""CPU indices in display order, and (perf, eff) counts."""
+	"""Physical cores in display order, each a tuple of its logical CPUs
+	(SMT siblings), and the (perf, eff, inner) counts in physical cores."""
 	present = sorted(cpu_ticks().keys())
+	cores, seen = [], set()
+	for c in present:
+		if c in seen:
+			continue
+		sib = [x for x in parse_cpulist(_cpu_sys(c, "topology/thread_siblings_list")) if x in present] or [c]
+		seen.update(sib)
+		cores.append(tuple(sorted(sib)))
 	p_cpus = parse_cpulist(read("/sys/devices/cpu_core/cpus"))
-	e_cpus = parse_cpulist(read("/sys/devices/cpu_atom/cpus"))
+	e_cpus = set(parse_cpulist(read("/sys/devices/cpu_atom/cpus")))
 	if p_cpus and e_cpus:
-		e = [c for c in e_cpus if c in present]
-		p = [c for c in present if c not in e]
-		return e + p, len(p), len(e)
-	return present, len(present), 0
+		e = [k for k in cores if k[0] in e_cpus]
+		p = [k for k in cores if k[0] not in e_cpus]
+		return e + p, len(p), len(e), len(e)
+	# No E-cores: the clusters that share a last-level cache. The one
+	# holding the scheduler's preferred core goes first, on the inner ring.
+	clusters = {}
+	for k in cores:
+		key = _cpu_sys(k[0], "cache/index3/shared_cpu_list").strip() or _cpu_sys(k[0], "topology/die_id").strip()
+		clusters.setdefault(key, []).append(k)
+	groups = list(clusters.values())
+	if len(groups) < 2:
+		return cores, len(cores), 0, 0
+	first = max(groups, key=lambda g: (max(_rank(c) for k in g for c in k), -g[0][0]))
+	rest = [k for k in cores if k not in first]
+	return first + rest, len(cores), 0, len(first)
 
 
-ORDER, PERF, EFF = core_order()
+ORDER, PERF, EFF, INNER = core_order()
 
 
 def cpu_util(prev, cur):
+	"""Busy share per physical core: 1 - prod(idle share of its threads)."""
 	out = []
-	for c in ORDER:
-		p, n = prev.get(c), cur.get(c)
-		if p is None or n is None:
-			out.append(0.0)  # went offline between readings
-			continue
-		total = n[1] - p[1]
-		idle = n[0] - p[0]
-		out.append(max(0.0, min(1.0, 1.0 - idle / total)) if total > 0 else 0.0)
+	for core in ORDER:
+		idle_all = 1.0
+		for c in core:
+			p, n = prev.get(c), cur.get(c)
+			if p is None or n is None or n[1] - p[1] <= 0:
+				continue  # offline between readings: counts as idle
+			idle_all *= max(0.0, min(1.0, (n[0] - p[0]) / (n[1] - p[1])))
+		out.append(1.0 - idle_all)
 	return out
 
 
@@ -286,11 +328,16 @@ prev_time = time.time()
 
 
 def sample():
-	global prev_ticks, prev_net, prev_time
+	global prev_ticks, prev_net, prev_time, ORDER, PERF, EFF, INNER
 	now = time.time()
 	dt = max(now - prev_time, 0.001)
 
 	ticks = cpu_ticks()
+	if set(ticks) != set(prev_ticks):
+		# A CPU came online or went offline (SMT toggled, hotplug): the
+		# cores and clusters are read again, so none is shown as idle
+		# while it is gone and a returning one is counted.
+		ORDER, PERF, EFF, INNER = core_order()
 	cores = cpu_util(prev_ticks, ticks)
 	prev_ticks = ticks
 	total = sum(cores) / len(cores) if cores else 0.0
@@ -327,7 +374,7 @@ def sample():
 		uptime = 0.0
 
 	return ('{"t":%s,' % fmt(now)
-		+ '"cpu":{"cores":[%s],"total":%s,"perf":%d,"eff":%d},' % (",".join(fmt(c) for c in cores), fmt(total), PERF, EFF)
+		+ '"cpu":{"cores":[%s],"total":%s,"perf":%d,"eff":%d,"inner":%d},' % (",".join(fmt(c) for c in cores), fmt(total), PERF, EFF, INNER)
 		+ '"load":[%s,%s,%s],' % (fmt(load[0], 2), fmt(load[1], 2), fmt(load[2], 2))
 		+ '"mem":{"total":%d,"used":%d,"wired":%d,' % (mem_total, used, wired)
 		+ '"compressed":%d,"free":%d,"pressure":%s},' % (compressed, free, fmt(pressure))

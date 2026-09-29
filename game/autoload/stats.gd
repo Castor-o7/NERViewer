@@ -7,6 +7,8 @@ signal sampled(s: StatSample)
 signal source_changed(name: String)
 
 const HISTORY_LEN := 360  # 3 minutes at 500 ms
+## cpu_perf and cpu_eff hold the outer and inner ring groups (see
+## StatSample.group_names): P and E on Apple Silicon.
 const HISTORY_KEYS := ["cpu_total", "cpu_perf", "cpu_eff", "mem_used", "net_rx_bps", "net_tx_bps", "load1", "load5", "load15"]
 
 ## The fast readings (CPU, network) move like a needle with inertia: a
@@ -83,11 +85,13 @@ func _on_sample(s: StatSample) -> void:
 	sampled.emit(s)
 
 
+## The outer (perf) or inner (eff) group, split as core_ring splits it:
+## on cpu_inner_cores, which is the E-cores wherever there are any.
 static func _group_mean(s: StatSample, perf: bool) -> float:
 	var n := s.cpu_cores.size()
-	var eff := clampi(s.cpu_eff_cores, 0, n)
-	var from := eff if perf else 0
-	var to := n if perf else eff
+	var inner := clampi(s.cpu_inner_cores, 0, n)
+	var from := inner if perf else 0
+	var to := n if perf else inner
 	if to <= from:
 		return 0.0
 	var sum := 0.0
@@ -156,6 +160,7 @@ func _process(dt: float) -> void:
 	smooth.uptime = raw.uptime
 	smooth.cpu_perf_cores = raw.cpu_perf_cores
 	smooth.cpu_eff_cores = raw.cpu_eff_cores
+	smooth.cpu_inner_cores = raw.cpu_inner_cores
 	smooth.mem_total = raw.mem_total
 	smooth.mem_wired = raw.mem_wired
 	smooth.mem_free = raw.mem_free

@@ -1,5 +1,6 @@
 extends Glyph
-## CPU as concentric rings. P-cores on the outer ring, E-cores on the
+## CPU as concentric rings. P-cores on the outer ring, E-cores (or, on a
+## CPU without them, the cache cluster carrying the light load) on the
 ## inner, arc length = utilization. The central triangle glows with the
 ## total. Geometry carries the data; luminance carries the feeling.
 
@@ -31,8 +32,8 @@ func _draw() -> void:
 
 	# Guide rings: the track the arcs run on. At idle this is the geometry.
 	var guide := Palette.dim(frame, 0.18 + 0.22 * breath)
-	draw_arc(Vector2.ZERO, outer_radius, 0.0, TAU, 160, guide, 1.0, true)
-	draw_arc(Vector2.ZERO, inner_radius, 0.0, TAU, 160, guide, 1.0, true)
+	draw_arc(Vector2.ZERO, outer_radius, 0.0, TAU, 160, guide, Palette.hair, true)
+	draw_arc(Vector2.ZERO, inner_radius, 0.0, TAU, 160, guide, Palette.hair, true)
 	_draw_dashed_ring((outer_radius + inner_radius) * 0.5, 48, Palette.dim(frame, 0.12 + 0.1 * breath), _drift)
 	_draw_dashed_ring(inner_radius - 30.0, 24, Palette.dim(frame, 0.12 + 0.1 * breath), -_drift * 1.5)
 	# The scale ring breathes. Dark at the bottom of the breath; at the top,
@@ -44,16 +45,16 @@ func _draw() -> void:
 	_draw_scale_ring(outer_radius + 26.0, Palette.dim(frame.lerp(light, 0.6 * swell), lerpf(0.04, 1.0, swell)))
 
 	var n := s.cpu_cores.size()
-	var eff := clampi(s.cpu_eff_cores, 0, n)
+	var inner := clampi(s.cpu_inner_cores, 0, n)
 	if n > 0:
-		_draw_group(s.cpu_cores.slice(eff, n), outer_radius, frame, light, 3.0)
-		_draw_group(s.cpu_cores.slice(0, eff), inner_radius, frame, light, 2.5)
+		_draw_group(s.cpu_cores.slice(inner, n), outer_radius, frame, light, 3.0)
+		_draw_group(s.cpu_cores.slice(0, inner), inner_radius, frame, light, 2.5)
 
-	# Spokes from the inner ring to the core, one per E-core boundary.
-	for i in maxi(eff, 1):
-		var a := -PI * 0.5 + i * TAU / maxi(eff, 1)
+	# Spokes from the inner ring to the core, one per inner-ring boundary.
+	for i in maxi(inner, 1):
+		var a := -PI * 0.5 + i * TAU / maxi(inner, 1)
 		var d := Vector2.from_angle(a)
-		draw_line(d * (core_radius + 16.0), d * (inner_radius - 36.0), Palette.dim(frame, 0.22), 1.0, true)
+		draw_line(d * (core_radius + 16.0), d * (inner_radius - 36.0), Palette.dim(frame, 0.22), Palette.hair, true)
 
 	# The core: the only filled shapes. A triangle split Sierpinski-wise
 	# once: three corner triangles around an empty middle one. Below 1.0
@@ -72,14 +73,16 @@ func _draw() -> void:
 		var b := pts[(i + 1) % 3]
 		var c := pts[(i + 2) % 3]
 		draw_colored_polygon(PackedVector2Array([a, (a + b) * 0.5, (a + c) * 0.5]), fill)
-	draw_arc(Vector2.ZERO, core_radius + 10.0, 0.0, TAU, 96, Palette.dim(core, 0.2 + 0.5 * total), 1.0, true)
+	draw_arc(Vector2.ZERO, core_radius + 10.0, 0.0, TAU, 96, Palette.dim(core, 0.2 + 0.5 * total), Palette.hair, true)
 
 	draw_brackets(Palette.dim(frame, 0.85), 22.0)
 	draw_ruler(half().y - 8.0, Palette.dim(frame, 0.35), 20)
 	draw_ruler(-half().y + 8.0, Palette.dim(frame, 0.35), 20, false)
 	if captions:
 		draw_caption("CPU", "TOTAL %04.1f" % (total * 100.0), frame, light)
-		label(Vector2(-half().x + 6.0, -half().y + 29.0), "P %d  E %d" % [s.cpu_perf_cores, s.cpu_eff_cores], Palette.dim(light, 0.55))
+		var names := s.group_names()
+		var counts := [s.cpu_perf_cores, s.cpu_eff_cores] if names[1] == "E" else [n - inner, inner]
+		label(Vector2(-half().x + 6.0, -half().y + 29.0), "%s %d  %s %d" % [names[0], counts[0], names[1], counts[1]], Palette.dim(light, 0.55))
 	_draw_readouts(s, light)
 
 
@@ -95,7 +98,7 @@ func _draw_group(vals: PackedFloat32Array, radius: float, frame: Color, light: C
 		var start := -PI * 0.5 + i * slice + _gap * 0.5
 		var v := clampf(vals[i], 0.0, 1.0)
 		var d := Vector2.from_angle(start)
-		draw_line(d * (radius - 5.0), d * (radius + 5.0), Palette.dim(frame, 0.4 + 0.2 * Palette.breath()), 1.0, true)
+		draw_line(d * (radius - 5.0), d * (radius + 5.0), Palette.dim(frame, 0.4 + 0.2 * Palette.breath()), Palette.hair, true)
 		# Never shorter than a dot, so an idle core still exists.
 		var end := start + maxf(span * v, 0.012)
 		var tint := frame.lerp(light, v * 0.85)
@@ -106,32 +109,34 @@ func _draw_group(vals: PackedFloat32Array, radius: float, frame: Color, light: C
 
 ## Ticks every 5 degrees, longer every 15, a hairline circle to hang them on.
 func _draw_scale_ring(radius: float, color: Color) -> void:
-	draw_arc(Vector2.ZERO, radius, 0.0, TAU, 180, Palette.dim(color, color.a * 0.5), 1.0, true)
+	draw_arc(Vector2.ZERO, radius, 0.0, TAU, 180, Palette.dim(color, color.a * 0.5), Palette.hair, true)
 	for i in 72:
 		var a := i * TAU / 72.0
 		var d := Vector2.from_angle(a)
 		var len := 6.0 if i % 3 == 0 else 3.0
-		draw_line(d * radius, d * (radius + len), color, 1.0, true)
+		draw_line(d * radius, d * (radius + len), color, Palette.hair, true)
 
 
 func _draw_dashed_ring(radius: float, dashes: int, color: Color, offset: float = 0.0) -> void:
 	var step := TAU / dashes
 	for i in dashes:
 		var a := i * step + offset
-		draw_arc(Vector2.ZERO, radius, a, a + step * 0.45, 6, color, 1.0, true)
+		draw_arc(Vector2.ZERO, radius, a, a + step * 0.45, 6, color, Palette.hair, true)
 
 
 ## Per-core readouts at each P-core slice, outside the outer ring.
 func _draw_readouts(s: StatSample, light: Color) -> void:
+	if Palette.lift:
+		return  # docked below the Mac's density the readouts are 4 px grey squares
 	var n := s.cpu_cores.size()
-	var eff := clampi(s.cpu_eff_cores, 0, n)
-	var perf := n - eff
+	var inner := clampi(s.cpu_inner_cores, 0, n)
+	var perf := n - inner
 	if perf <= 0:
 		return
 	var slice := TAU / perf
 	for i in perf:
 		var a := -PI * 0.5 + i * slice + slice * 0.5
 		var p := Vector2.from_angle(a) * (outer_radius + 44.0)
-		var txt := "%02d" % int(round(s.cpu_cores[eff + i] * 99.0))
+		var txt := "%02d" % int(round(s.cpu_cores[inner + i] * 99.0))
 		label(p + Vector2(0.0, 4.0), txt, Palette.dim(light, 0.35), HORIZONTAL_ALIGNMENT_CENTER)
 

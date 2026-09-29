@@ -129,8 +129,8 @@ func draw_brackets(color: Color, arm: float = 18.0) -> void:
 	for sx in [-1.0, 1.0]:
 		for sy in [-1.0, 1.0]:
 			var c := Vector2(sx * h.x, sy * h.y)
-			draw_line(c, c + Vector2(-sx * arm, 0.0), color, 1.0, true)
-			draw_line(c, c + Vector2(0.0, -sy * arm), color, 1.0, true)
+			draw_line(c, c + Vector2(-sx * arm, 0.0), color, Palette.hair, true)
+			draw_line(c, c + Vector2(0.0, -sy * arm), color, Palette.hair, true)
 
 
 ## Hairline ticks along a horizontal edge, the reference's rulers.
@@ -140,7 +140,7 @@ func draw_ruler(y: float, color: Color, count: int = 20, up: bool = true) -> voi
 	for i in count + 1:
 		var x := -h.x + i * size.x / count
 		var len := 5.0 if i % 5 == 0 else 2.5
-		draw_line(Vector2(x, y), Vector2(x, y + dir * len), color, 1.0, true)
+		draw_line(Vector2(x, y), Vector2(x, y + dir * len), color, Palette.hair, true)
 
 
 func label(pos: Vector2, text: String, color: Color, align := HORIZONTAL_ALIGNMENT_LEFT, px: int = SMALL) -> void:
