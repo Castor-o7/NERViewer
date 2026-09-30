@@ -131,8 +131,12 @@ case "$(uname)" in
     helper/build.sh
 
     echo "-- export ($PRESET)"
-    rm -rf "$OUT"
+    # Empty it, never remove it: a running export has made it its working
+    # directory, and with the directory gone every path it resolves fails
+    # (getcwd) until it restarts. Removing each file first means the new
+    # ones are new inodes; the running copy keeps reading the old pck.
     mkdir -p "$OUT"
+    find "$OUT" -mindepth 1 -delete
     # A failed export can still leave the bare template behind; drop it so
     # launch_agent.sh never installs a binary with no game in it.
     if ! gd --path game --headless --export-release "$PRESET" "../$EXE" \
