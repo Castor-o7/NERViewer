@@ -6,10 +6,12 @@ Paths are relative to the Grimoire folder that holds both repos.
 
 ## Build
 
-1. `cd NERViewer/helper && sh build.sh`. It compiles `main.swift` and prints `yggstat ok: N cores, N values, inner <E> eff ...`. A compile error here is the first thing to fix.
+1. `cd NERViewer/helper && sh build.sh`. It compiles `main.swift` twice, for arm64 and x86_64 at the export presets' minimum macOS versions, joins them with `lipo`, and prints `yggstat ok: N cores, N values, inner <E> eff ...`. A compile error here is the first thing to fix: `main.swift` gained per-interface network rates and a monotonic clock (2026-09-29) that have never been compiled. Then `lipo -info ../game/bin/yggstat` names both architectures; a `WARNING ... slice did not build` line means only the host's was made.
 2. `cd YggdrasilSystem && tools/build_app.sh` from a clean clone. Two checks:
    - the export-templates precheck explains itself when the templates are missing;
    - `GODOT=/path/to/Godot tools/build_app.sh` uses that path even with a `godot` on `PATH`.
+   - `NERViewer/tools/build_app.sh` with no `godot` on `PATH` but a `godot4`, or only `/Applications/Godot.app`, still finds it.
+   - `NERViewer/tools/launch_agent.sh install` from a checkout whose path holds a `&` (or a space) writes a plist that `plutil -lint` accepts.
 
 ## The core glyph on Apple Silicon (must be unchanged)
 
@@ -18,11 +20,17 @@ Paths are relative to the Grimoire folder that holds both repos.
 5. `NERViewer/tools/build_app.sh`, then open `dist/NERViewer.app`. The core ring, the `P n  E n` caption, the per-core readouts and the hairlines look exactly as before. Screenshot it next to a build from `main`.
 6. The LOAD dots grid is unchanged: on Apple Silicon the thread count is the core count.
 
-## Docking (known broken on the Mac)
+## Docking (fixed, never run on a Mac)
 
-7. Run NERViewer from a terminal with the cockpit up. Expect `ERROR ... not a child` and **no** `docked to`. This confirms the known gap: `OS.is_process_running` only sees child processes, so the sigil never docks on a Mac. The planned fix is a `/bin/ps -ww -p <pid> -o command=` check, cached per pid or run off the main thread (see the comment on `_pid_alive` in `NERViewer/game/scenes/main.gd`). Build and test it here.
+7. `_pid_alive` in `NERViewer/game/scenes/main.gd` now asks `/bin/ps -ww -p <pid> -o command=` on macOS, cached for 2 s. Run NERViewer from a terminal with the cockpit up:
+   - it prints `docked to` and the sigil sits in the cockpit; no `not a child` error;
+   - `kill -9` the cockpit: NERViewer undocks within about 2 s;
+   - watch for a hitch twice a second while docked. If `ps` shows up as a stutter, the comment there says how to move it off the main thread.
 
 ## Readings
+
+- **No signal:** with NERViewer up, `pkill -STOP yggstat`. Within about 3 s the core ring says NO SIGNAL (docked too) and the panels dim; the helper is replaced and the readings come back on their own. `pkill yggstat` does the same through the exit path. Nothing should ever show made-up numbers: synthetic data is only `-- --synthetic` or `-- --arch=`.
+- **Network:** start a download, then connect and disconnect a VPN, and unplug or switch off an adapter. The rate never jumps to an absurd figure, and a download through the VPN reads once, not twice. Wi-Fi must still count (it should report as Ethernet, `IFT_ETHER`).
 
 8. `sysctl kern.memorystatus_level` at rest and under load. Compare with 100·(1 − (free + inactive + purgeable)/total) to judge how close the Linux memory-pressure reading now rests to the Mac's.
 
@@ -39,9 +47,9 @@ Paths are relative to the Grimoire folder that holds both repos.
 - **Docking**, above.
 - **Terminal profile:** it can stay on Yggdrasil when zen ends with Terminal closed. Turning zen on launches Terminal, and zen-off resets every tab and the startup setting.
 - **Logout:** logging out, or `launch_agent.sh remove`, sends SIGTERM, so zen is never handed back.
-- **Network counter:** it wraps to a huge number when an interface disappears (Swift).
 - **Per-app CPU:** it double-counts child apps and dips when a child exits (Swift).
 - **Dev-run NERViewer:** a NERViewer run from the editor isn't recognised by the cockpit (Swift).
-- **Universal helpers:** the Swift helpers aren't universal binaries (needs `lipo`).
+- **Universal helpers:** NERViewer's helper is universal now (item 1); the cockpit's own Swift helper is not.
+- **macOS 11:** without `hw.perflevel*` the helper puts every core on the outer ring (`inner_kind` `none`). Untested; only matters on Big Sur.
 - **1x screens:** the thick-line (`lift`) mode and the inscription oversampling are untested on a non-Retina display.
 - **Multi-monitor:** the frames and title-bar cover are untested with more than one screen.

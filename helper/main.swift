@@ -15,7 +15,10 @@
 //                  perf/eff: hw.perflevel0/1.logicalcpu. No inner or
 //                  inner_kind: the reader takes inner = eff, kind eff.
 //                  This line is byte for byte what it was before Intel
-//                  Macs were handled; keep it so.
+//                  Macs were handled; keep it so. When perf + eff is not
+//                  the value count (macOS 11 has no perflevel sysctls),
+//                  it says so as Intel does: perf = count, eff 0, inner
+//                  0, kind none, every core on the outer ring.
 //   Intel Mac      No perflevels. perf: hw.physicalcpu, eff: 0.
 //                  With Hyper-Threading (logical == 2 * physical), kind
 //                  smt: each core's second thread on the inner ring, its
@@ -146,11 +149,19 @@ func vmStats() -> vm_statistics64 {
 //
 // The ifmib sysctl is the only source with true 64-bit counters on this OS;
 // NET_RT_IFLIST2 and getifaddrs both truncate to 32 bits (verified 2026-09-09).
+//
+// Only hardware links count, as on Linux, so tunnel and VM traffic is not
+// counted twice (once on utun/bridge, again on en0): link type Ethernet
+// (Wi-Fi reports it too) or cellular, minus vmenet* and bridge*, which are
+// virtual but may claim Ethernet. utun/ipsec are IFT_OTHER, bridges
+// IFT_BRIDGE. If none match, every interface but lo0.
 
-func netBytes() -> (rx: UInt64, tx: UInt64) {
-    guard let list = if_nameindex() else { return (0, 0) }
+struct IfBytes { var rx, tx: UInt64 }
+
+func netCounters() -> [String: IfBytes] {
+    guard let list = if_nameindex() else { return [:] }
     defer { if_freenameindex(list) }
-    var rx: UInt64 = 0, tx: UInt64 = 0
+    var all: [String: IfBytes] = [:], hw: [String: IfBytes] = [:]
     var p = list
     while p.pointee.if_index != 0 {
         let name = String(cString: p.pointee.if_name)
@@ -159,13 +170,31 @@ func netBytes() -> (rx: UInt64, tx: UInt64) {
             var d = ifmibdata()
             var len = MemoryLayout<ifmibdata>.size
             if sysctl(&mib, 6, &d, &len, nil, 0) == 0 {
-                rx &+= d.ifmd_data.ifi_ibytes
-                tx &+= d.ifmd_data.ifi_obytes
+                let b = IfBytes(rx: d.ifmd_data.ifi_ibytes, tx: d.ifmd_data.ifi_obytes)
+                all[name] = b
+                let t = d.ifmd_data.ifi_type  // 0x06 IFT_ETHER, 0xff IFT_CELLULAR
+                if (t == 0x06 || t == 0xff) && !name.hasPrefix("vmenet") && !name.hasPrefix("bridge") {
+                    hw[name] = b
+                }
             }
         }
         p = p.advanced(by: 1)
     }
-    return (rx, tx)
+    return hw.isEmpty ? all : hw
+}
+
+/// Bytes per second from two readings, per interface: one that is new has
+/// only its baseline this time, one whose counter went backwards was reset
+/// and is skipped once, one that vanished is gone. A sum over interfaces
+/// would drop when one leaves and wrap to exabytes.
+func netRate(_ prev: [String: IfBytes], _ cur: [String: IfBytes], _ dt: Double) -> (rx: Double, tx: Double) {
+    var rx: UInt64 = 0, tx: UInt64 = 0
+    for (name, c) in cur {
+        guard let p = prev[name] else { continue }
+        if c.rx >= p.rx { rx &+= c.rx - p.rx }
+        if c.tx >= p.tx { tx &+= c.tx - p.tx }
+    }
+    return (Double(rx) / dt, Double(tx) / dt)
 }
 
 // MARK: - Sample
@@ -176,12 +205,16 @@ func fmt(_ v: Double, _ places: Int = 3) -> String {
 }
 
 var prevTicks = cpuTicks()
-var prevNet = netBytes()
-var prevTime = Date().timeIntervalSince1970
+var prevNet = netCounters()
+/// Rates divide by monotonic time: the wall clock can step (NTP, timed
+/// after wake, by hand) and a step back would multiply them. Wall time is
+/// only for `t`.
+var prevMono = ProcessInfo.processInfo.systemUptime
 
 func sample() -> String {
     let now = Date().timeIntervalSince1970
-    let dt = max(now - prevTime, 0.001)
+    let mono = ProcessInfo.processInfo.systemUptime
+    let dt = max(mono - prevMono, 0.001)
 
     let ticks = cpuTicks()
     let cores = cpuUtil(prevTicks, ticks)
@@ -200,19 +233,23 @@ func sample() -> String {
     let level = Double(sysctlInt("kern.memorystatus_level"))
     let pressure = max(0, min(1, 1 - level / 100))
 
-    let net = netBytes()
-    let rxBps = Double(net.rx &- prevNet.rx) / dt
-    let txBps = Double(net.tx &- prevNet.tx) / dt
+    let net = netCounters()
+    let (rxBps, txBps) = netRate(prevNet, net, dt)
     prevNet = net
-    prevTime = now
+    prevMono = mono
 
     let thermal = ProcessInfo.processInfo.thermalState.rawValue
     let uptime = ProcessInfo.processInfo.systemUptime
 
     let cpu: String
-    if appleSilicon {
+    if appleSilicon && perfCores + effCores == cores.count {
         let coreList = cores.map { fmt($0) }.joined(separator: ",")
         cpu = "\"cpu\":{\"cores\":[\(coreList)],\"total\":\(fmt(total)),\"perf\":\(perfCores),\"eff\":\(effCores)},"
+    } else if appleSilicon {
+        // No P/E split to trust (macOS 11): every core on the outer ring.
+        let coreList = cores.map { fmt($0) }.joined(separator: ",")
+        cpu = "\"cpu\":{\"cores\":[\(coreList)],\"total\":\(fmt(total)),\"perf\":\(cores.count),\"eff\":0,"
+            + "\"inner\":0,\"inner_kind\":\"none\"},"
     } else {
         let l = intelLayout(cores.count)
         let coreList = l.order.map { fmt(cores[$0]) }.joined(separator: ",")
