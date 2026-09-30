@@ -4,12 +4,16 @@ extends Node2D
 ## status line says where the numbers come from.
 ##
 ## Keys: Tab cycles synthetic scenarios, A the synthetic architectures
-## (the core glyph as another CPU would draw it), P cycles the palettes,
-## M toggles minimalist mode (the sigil alone), B toggles desktop mode
-## (no ground, no border, floating on the desktop), S saves a screenshot
-## beside the project, G cycles the smoked-glass backing behind each panel
-## in desktop mode, Q or Escape quits. In desktop mode, drag anywhere
-## to move the window. Mode, palette and window position persist.
+## (the core glyph as another CPU would draw it); both only in synthetic
+## mode, which is never a fallback: start it with `-- --synthetic` or
+## `-- --arch=<name>`. P cycles the palettes, M toggles minimalist mode
+## (the sigil alone), B toggles desktop mode (no ground, no border,
+## floating on the desktop), S saves a screenshot (screenshots/ beside the
+## project in the editor, the Pictures folder in an export), G cycles the
+## smoked-glass backing behind each panel in desktop mode, Q or Escape
+## quits. In desktop mode, drag anywhere to move the window. Mode, palette
+## and window position persist; a position on no connected screen is not
+## restored, and the window shrinks to fit a screen smaller than it.
 ##
 ## Docked: another app (the Yggdrasil System cockpit) can write
 ## user://dock.cfg with a screen rect; while that file exists the piece is
@@ -49,6 +53,11 @@ const DOCK_POLL := 0.2
 ## Design units of the square the sigil fills when docked: the scale ring
 ## sits at radius 236, the core halo a little past it.
 const DOCK_DIAMETER := 520
+## How long a macOS ps answer about the cockpit's pid stands.
+const PS_TTL_MS := 2000
+## Least overlap, in pixels, with a connected screen for a saved position
+## to count as on it: enough of the window to grab or see.
+const ON_SCREEN_AREA := 64 * 64
 
 var minimal := false
 var desktop := false
@@ -59,7 +68,7 @@ var docked := false
 var dockable := true
 var _dock_text := ""
 var _dock_program := ""
-## The cockpit that wrote the dock file, watched while docked (Linux).
+## The cockpit that wrote the dock file, watched while docked.
 var _dock_pid := 0
 var _dock_timer := DOCK_POLL
 var _core_home := Vector2.ZERO
@@ -70,16 +79,21 @@ var stowed := false
 ## Where the window was when prefs were last saved; Linux saves again when
 ## the window manager has moved it (see _process and _unhandled_input).
 var _saved_position := Vector2i.ZERO
+## "pid|program" -> [alive, ticks_msec] for the macOS ps check; one entry,
+## the cockpit of the moment.
+static var _ps_cache := {}
 
 
 func _ready() -> void:
 	Palette.changed.connect(_apply_palette)
 	Stats.source_changed.connect(func(_n: String) -> void: _update_status())
+	Stats.status_changed.connect(_update_status)
 	# This runs all day: cap the frame rate and let the process sleep
 	# between frames instead of spinning.
 	Engine.max_fps = FPS_AWAKE
 	OS.low_processor_usage_mode = true
 	_core_home = core_ring.position
+	_fit_to_screen(true)
 	_load_prefs()
 	_apply_palette()
 	_update_status()
@@ -123,7 +137,46 @@ func _load_prefs() -> void:
 		set_desktop(true)
 	var pos = cfg.get_value("window", "position", null)
 	if pos is Vector2i:
-		get_window().position = pos
+		if _on_a_screen(Rect2i(pos, get_window().size)):
+			get_window().position = pos
+			# A framed window is meant to be seen whole; a desktop-mode one
+			# is clear at its edges and may hang over one on purpose.
+			_fit_to_screen(false, not desktop)
+		else:
+			# Saved on a monitor that is gone: borderless in desktop mode,
+			# it would be out of reach for good. Centre it and keep that.
+			_fit_to_screen(true)
+			_save_prefs()
+
+
+## Does enough of `r` lie on some connected screen to see and grab?
+## With no screen to ask (headless) it is taken as yes.
+static func _on_a_screen(r: Rect2i) -> bool:
+	var asked := false
+	for i in DisplayServer.get_screen_count():
+		var u := DisplayServer.screen_get_usable_rect(i)
+		if u.has_area():
+			asked = true
+			if u.intersection(r).get_area() >= ON_SCREEN_AREA:
+				return true
+	return not asked
+
+
+## The design size, or less on a screen too small for it (a 1366x768
+## panel, a 1440x900 one under a taskbar); canvas_items stretch scales
+## the composition, content_scale_size stays DESIGN. Centred, or with
+## `keep_inside` pulled inside the screen's usable area.
+func _fit_to_screen(recenter: bool, keep_inside := true) -> void:
+	var win := get_window()
+	var u := DisplayServer.screen_get_usable_rect(win.current_screen)
+	if u.size.x <= 0 or u.size.y <= 0:
+		return  # headless: no screen to fit
+	var k := minf(1.0, minf(u.size.x * 0.95 / DESIGN.x, u.size.y * 0.95 / DESIGN.y))
+	win.size = Vector2i(Vector2(DESIGN) * k)
+	if recenter:
+		win.position = u.position + (u.size - win.size) / 2
+	elif keep_inside:
+		win.position = win.position.clamp(u.position, u.position + u.size - win.size)
 
 
 func _save_prefs() -> void:
@@ -198,6 +251,9 @@ func _apply_palette() -> void:
 func _update_status() -> void:
 	var name := Stats.source.source_name() if Stats.source else "none"
 	status.text = "%s  ·  %s" % [name.to_upper(), Palette.theme_name.to_upper()]
+	if Stats.no_signal():
+		# The reason as the helper gave it: a path or a Python error.
+		status.text += "  ·  NO SIGNAL  ·  " + Stats.status
 
 
 func _process(dt: float) -> void:
@@ -236,8 +292,8 @@ func _poll_dock() -> void:
 	if text == _dock_text:
 		# A cockpit that crashed or was killed leaves its file behind
 		# unchanged, and the sigil would float on top of an empty desktop.
-		# On Linux the /proc check is cheap enough to make every poll.
-		if not (OS.get_name() == "Linux" and docked and _dock_pid > 0 and not _pid_alive(_dock_pid, _dock_program)):
+		# /proc is cheap enough for every poll; macOS's ps answer is cached.
+		if not (docked and _dock_pid > 0 and not _pid_alive(_dock_pid, _dock_program)):
 			return
 	_dock_text = text
 	if text.is_empty():
@@ -265,28 +321,58 @@ func _poll_dock() -> void:
 ## Is the cockpit that wrote the dock file still alive? Godot 4.7's
 ## OS.is_process_running answers only for its own children (it is waitpid
 ## underneath, and logs an error and reports any other pid as gone;
-## verified on Linux 2026-09-28), so on Linux the cockpit would always look
-## dead and the piece would never dock. /proc answers for every process,
-## and its command line must still name the cockpit's program (newer
-## cockpits write it), so a pid recycled after a crash does not count.
-## Read through a handle: proc files report a length of 0.
-## macOS keeps the call it always had. That is waitpid (os_unix.cpp) and
-## sees no process but a child, so a Mac sigil does not dock yet; a
-## `/bin/ps -ww -p pid -o command=` check, off the main thread or cached
-## per pid, waits on a test on a Mac.
+## verified on Linux 2026-09-28), and the cockpit is never one, so the
+## piece would never dock. Linux asks /proc, macOS asks /bin/ps. Either
+## way the process must still be the cockpit's program (newer cockpits
+## write it), so a pid recycled after a crash does not count.
 static func _pid_alive(pid: int, program: String = "") -> bool:
-	if OS.get_name() == "Linux":
-		var f := FileAccess.open("/proc/%d/cmdline" % pid, FileAccess.READ)
-		if f == null:
-			return false
-		if program.is_empty():
-			return true
-		var raw := f.get_buffer(4096)
-		for i in raw.size():
-			if raw[i] == 0:
-				raw[i] = 32  # argv is NUL-separated
-		return program in raw.get_string_from_utf8()
+	match OS.get_name():
+		"Linux":
+			return _proc_alive(pid, program)
+		"macOS":
+			return _ps_alive(pid, program)
 	return OS.is_process_running(pid)
+
+
+## The cockpit writes `program` as its resolved executable's name (Godot
+## reads it through /proc/self/exe), and argv[0] is whatever symlink or
+## launcher started it, so the exe link is asked first. Under hidepid, or
+## for another user, the link is unreadable and the command line decides.
+## Read through a handle: proc files report a length of 0.
+static func _proc_alive(pid: int, program: String) -> bool:
+	var f := FileAccess.open("/proc/%d/cmdline" % pid, FileAccess.READ)
+	if f == null:
+		return false
+	if program.is_empty():
+		return true
+	var d := DirAccess.open("/proc/%d" % pid)
+	if d and d.is_link("exe") and d.read_link("exe").trim_suffix(" (deleted)").get_file() == program:
+		return true
+	var raw := f.get_buffer(4096)
+	for i in raw.size():
+		if raw[i] == 0:
+			raw[i] = 32  # argv is NUL-separated
+	return program in raw.get_string_from_utf8()
+
+
+## ps costs 10-20 ms, so an answer stands for PS_TTL_MS: one spawn per
+## dock-file change and at most one every two seconds while docked. ps
+## prints the full .../Contents/MacOS/<program> path, so the name matches
+## as a substring; its exit code is non-zero once the pid is gone. Not yet
+## run on a Mac (docs/mac-checklist.md item 7).
+static func _ps_alive(pid: int, program: String) -> bool:
+	var key := "%d|%s" % [pid, program]
+	var now := Time.get_ticks_msec()
+	var hit = _ps_cache.get(key)
+	if hit and now - int(hit[1]) < PS_TTL_MS:
+		return hit[0]
+	var out := []
+	# stderr stays out of `out`, so an error text never passes for a command.
+	var code := OS.execute("/bin/ps", ["-ww", "-p", str(pid), "-o", "command="], out, false)
+	var cmd := str(out[0]).strip_edges() if not out.is_empty() else ""
+	var alive := code == 0 and not cmd.is_empty() and (program.is_empty() or program in cmd)
+	_ps_cache = {key: [alive, now]}
+	return alive
 
 
 func set_docked(on: bool, rect: Rect2i) -> void:
@@ -327,7 +413,7 @@ func set_docked(on: bool, rect: Rect2i) -> void:
 	Palette.hair = 1.0
 	set_stowed(false)
 	win.content_scale_size = DESIGN
-	win.size = DESIGN
+	_fit_to_screen(true)
 	status.visible = true
 	header.visible = true
 	core_ring.position = _core_home
@@ -402,6 +488,26 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			_save_prefs()
 			get_tree().quit()
 		KEY_S:
-			var path := ProjectSettings.globalize_path("res://../screenshots/manual.png")
-			get_viewport().get_texture().get_image().save_png(path)
-			print("saved ", path)
+			_save_screenshot()
+
+
+## In the editor, screenshots/manual.png beside the project as always. An
+## export's res:// is its own folder (inside the signed bundle on a Mac),
+## so it saves a dated file to Pictures, or user:// without one.
+func _save_screenshot() -> void:
+	var dir := ""
+	var file := "manual.png"
+	if OS.has_feature("editor"):
+		dir = ProjectSettings.globalize_path("res://../screenshots")
+	else:
+		dir = OS.get_system_dir(OS.SYSTEM_DIR_PICTURES)
+		if dir.is_empty():
+			dir = ProjectSettings.globalize_path("user://screenshots")
+		file = "nerviewer_%s.png" % Time.get_datetime_string_from_system().replace(":", "-")
+	DirAccess.make_dir_recursive_absolute(dir)  # a fresh clone has no screenshots/
+	var path := dir.path_join(file)
+	var err := get_viewport().get_texture().get_image().save_png(path)
+	if err == OK:
+		print("saved ", path)
+	else:
+		push_warning("screenshot not saved (%s): %s" % [error_string(err), path])

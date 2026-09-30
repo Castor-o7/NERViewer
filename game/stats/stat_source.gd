@@ -16,3 +16,10 @@ signal failed(reason: String)
 
 
 @abstract func source_name() -> String
+
+
+## Stats is done with this source. A source that must wind down first
+## (a helper's reader thread) overrides this and frees itself later.
+func retire() -> void:
+	stop()
+	queue_free()

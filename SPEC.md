@@ -184,6 +184,24 @@ take the helper down:
 - `top`: `proc_listallpids` + `proc_pid_rusage` deltas + `proc_name`,
   top five by CPU. The names of things living in the tree.
 
+### yggstat.py — the Linux helper
+
+`helper/yggstat.py`, Python 3 standard library only; `build.sh` copies it to
+`game/bin/yggstat` on Linux. Same contract, same flags. Its header comment
+maps every field onto `/proc` and `/sys`; the readings that are not the
+obvious one:
+
+| field | reading | why |
+|---|---|---|
+| mem.total | online memory blocks × block size; with blocks over 128 MiB, the firmware map's System RAM rounded up to 1 GiB (never above the blocks) | bare-metal x86 from 64 GB uses 2 GiB blocks, and the PCI hole and top of RAM count as whole ones: 66 GiB on a 64 GB box |
+| mem.used, pressure | MemTotal − (MemAvailable + ZFS ARC size − c_min) | the ARC is reclaimable but outside MemAvailable; htop and btop count it as available too |
+| thermal | k10temp Tdie/Tctl (unlabelled temp1 before Zen), zenpower, coretemp's hottest package (its hottest core before Sandy Bridge), the Pi's cpu_thermal, else the hottest CPU thermal zone (x86_pkg_temp, ARM `cpu*/soc*/bigcore*/littlecore*/cpuss*/cluster*-thermal`), else acpitz | Intel's crit is Tjmax, so its tiers are Tjmax −10 / Tjmax / +5 as AMD's are; pre-Zen k10temp's crit (HTC) stands in for AMD's Tjmax, which is 70 before Zen without one; a zone's crit is its lowest critical trip |
+| net | byte deltas over CLOCK_MONOTONIC | a wall-clock step would divide by ~0 |
+
+A sample that raises skips that tick (traceback on stderr, rate-limited);
+only a closed stdout ends the loop. `--once` exits 1 when its sample fails.
+Tests are fake `/sys` trees: `python3 -m unittest discover -s helper`.
+
 ### Godot side
 
 **StatSource** is the abstract contract. Everything above the autoload
@@ -264,6 +282,15 @@ func stop() -> void:
 Order in `stop()` matters: kill, then close, then join. Call it from
 `_exit_tree` and from `NOTIFICATION_WM_CLOSE_REQUEST`.
 
+Hardened 2026-09-29, past the sketch: the reader thread touches only a
+shared `Link` (lines, closed flag, stderr tail), never the node, so a
+source Stats has dropped can free itself whenever its thread ends. A
+helper alive but silent for `STALL_MS` (six intervals, counted from the
+spawn) is killed and reported as stalled. `failed` carries the helper's
+exit code and the last line of its stderr, which is where yggstat's
+traceback lands, and `stop()` never joins a thread still blocked in a
+read.
+
 **SyntheticStatSource** emits at the same 500 ms cadence from scripted
 scenarios, with `FastNoiseLite` layered on so nothing is sterile. This is
 the art-direction tool; the piece is designed against it before real data
@@ -318,9 +345,16 @@ static func log_norm(bps: float, ceiling_bps: float) -> float:
 	return clampf(log(1.0 + bps) / log(1.0 + ceiling_bps), 0.0, 1.0)
 ```
 
-Startup: try `HelperStatSource`; on `failed`, fall back to
-`SyntheticStatSource("idle")` and say so quietly in the corner in phosphor
-text. The piece must never show a blank frame.
+Startup: `HelperStatSource`, always. On `failed` the last sample stays
+on screen marked NO SIGNAL (`Stats.live` false, `Stats.status` the
+reason; the panels dim and the core ring says so, docked or not) and a
+fresh helper is tried after 1, 2, 4 ... 30 s, the backoff reset once one
+has run for 30 s. A helper
+that was missing is found as soon as helper/build.sh has run. The piece
+must never show a blank frame, and never invented numbers as if they
+were this machine's: synthetic data only when asked for, with
+`-- --synthetic` or `-- --arch=<name>`. (Until 2026-09-29 a failed helper
+fell back to `SyntheticStatSource("idle")` for good.)
 
 Smoothing, decided 2026-09-10: the fast readings (per-core and total
 CPU, network rates) follow each sample as a critically damped spring

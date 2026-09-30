@@ -11,7 +11,13 @@ extends Node2D
 ## Palette.breath(), the one slow breath, and nothing else.
 const SMALL := 10
 
+## With no signal (Stats.no_signal) a panel's frozen readings fade to this.
+const NO_SIGNAL_ALPHA := 0.3
+
 @export var size := Vector2(300.0, 200.0)
+
+## Off for a glyph that draws its own no-signal state (the core ring).
+var dim_without_signal := true
 
 var _font: Font = Palette.FONT
 
@@ -21,6 +27,9 @@ func _ready() -> void:
 
 
 func _process(_dt: float) -> void:
+	if dim_without_signal:
+		# self_modulate, not modulate: minimalist mode tweens modulate.
+		self_modulate.a = NO_SIGNAL_ALPHA if Stats.no_signal() else 1.0
 	queue_redraw()
 
 

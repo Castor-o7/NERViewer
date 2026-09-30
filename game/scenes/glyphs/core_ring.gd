@@ -28,6 +28,10 @@ const DOCKED_SLICES_MAX := 32
 var _drift := 0.0
 
 
+func _init() -> void:
+	dim_without_signal = false
+
+
 func _process(dt: float) -> void:
 	_drift = fmod(_drift + dt * TAU / DRIFT_PERIOD, TAU)
 	super(dt)
@@ -46,7 +50,11 @@ func _draw() -> void:
 	draw_arc(Vector2.ZERO, outer_radius, 0.0, TAU, 160, guide, Palette.hair, true)
 	var n := s.cpu_cores.size()
 	var inner := clampi(s.cpu_inner_cores, 0, n)
-	if n > 0 and inner == 0:
+	# No signal: the geometry alone, a hollow core and the words, so
+	# frozen or missing readings never pass for the machine's. This glyph
+	# says it because docked it is the only thing on screen.
+	var lost := Stats.no_signal()
+	if n > 0 and inner == 0 and not lost:
 		# Nothing for the inner ring (one cluster, no SMT, no E-cores): its
 		# track is lit and breathes instead of lying dark, so it reads as
 		# part of the machine rather than a missing half. Apple Silicon
@@ -65,6 +73,10 @@ func _draw() -> void:
 	# 2026-09-10 at Josh's request: a beat is discrete, a breath flows.
 	var swell := smoothstep(0.0, 1.0, breath)
 	_draw_scale_ring(outer_radius + 26.0, Palette.dim(frame.lerp(light, 0.6 * swell), lerpf(0.04, 1.0, swell)))
+
+	if lost:
+		_draw_no_signal(frame, breath)
+		return
 
 	if n > 0:
 		var outer_vals := s.cpu_cores.slice(inner, n)
@@ -110,6 +122,22 @@ func _draw() -> void:
 		var groups := "%s %d" % [names[0], counts[0]] if names[1] == "" else "%s %d  %s %d" % [names[0], counts[0], names[1], counts[1]]
 		label(Vector2(-half().x + 6.0, -half().y + 29.0), groups, Palette.dim(light, 0.55))
 	_draw_readouts(s, light)
+
+
+func _draw_no_signal(frame: Color, breath: float) -> void:
+	var pts := PackedVector2Array()
+	for i in 4:
+		pts.append(Vector2.from_angle(-PI * 0.5 + i * TAU / 3.0) * core_radius)
+	draw_polyline(pts, Palette.dim(frame, 0.35), Palette.hair, true)
+	# Docked the sigil is a few hundred pixels across: the words go large.
+	var px := SMALL if captions else 30
+	var alarm := Palette.dim(Palette.color("alarm"), 0.55 + 0.3 * breath)
+	label(Vector2(0.0, core_radius + 14.0 + px), "NO SIGNAL", alarm, HORIZONTAL_ALIGNMENT_CENTER, px)
+	draw_brackets(Palette.dim(frame, 0.85), 22.0)
+	draw_ruler(half().y - 8.0, Palette.dim(frame, 0.35), 20)
+	draw_ruler(-half().y + 8.0, Palette.dim(frame, 0.35), 20, false)
+	if captions:
+		draw_caption("CPU", "NO SIGNAL", frame, Palette.color("alarm"))
 
 
 ## One ring of cores. Each core owns an equal slice; its arc fills the

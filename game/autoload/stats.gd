@@ -5,6 +5,13 @@ extends Node
 
 signal sampled(s: StatSample)
 signal source_changed(name: String)
+## `live` or `status` changed.
+signal status_changed
+
+## Helper restarts back off 1, 2, 4 ... seconds, to this. The backoff
+## starts over only once a helper has run this long, so one that sends a
+## few lines and dies each time still backs off.
+const RETRY_MAX := 30.0
 
 const HISTORY_LEN := 360  # 3 minutes at 500 ms
 ## cpu_perf and cpu_eff hold the outer and inner ring groups (see
@@ -33,7 +40,19 @@ var raw := StatSample.new()
 var smooth := StatSample.new()
 var history: Dictionary[String, History] = {}
 var source: StatSource
+## Why there is no signal; "" while there is, and before the first sample.
+## While set, raw holds the last sample there was and the glyphs show NO
+## SIGNAL over it: a monitor that has lost its source says so rather than
+## pass off old or invented numbers as the machine's.
 var status := ""
+## The current source has sent a sample and has not failed since.
+var live := false
+## Synthetic data only when asked for: `-- --synthetic` or `-- --arch=`.
+var synthetic := false
+
+var _retry := 1.0
+var _retry_timer: SceneTreeTimer
+var _live_ms := 0
 
 var _has_raw := false
 var _vel_cores := PackedFloat32Array()
@@ -45,39 +64,81 @@ var _vel_tx := 0.0
 func _ready() -> void:
 	for key in HISTORY_KEYS:
 		history[key] = History.new(HISTORY_LEN)
-	# `-- --arch=<name>` shows a synthetic machine of that architecture
-	# (SyntheticStatSource.ARCHS) instead of this one.
+	# `-- --synthetic` shows the scripted machine instead of this one, and
+	# `-- --arch=<name>` one of that architecture (SyntheticStatSource.ARCHS).
+	var arch := ""
 	for arg in OS.get_cmdline_user_args():
-		if arg.begins_with("--arch="):
-			var syn := SyntheticStatSource.new()
-			syn.set_arch(arg.trim_prefix("--arch="))
-			use(syn)
-			return
+		if arg == "--synthetic":
+			synthetic = true
+		elif arg.begins_with("--arch="):
+			synthetic = true
+			arch = arg.trim_prefix("--arch=")
+	if synthetic:
+		var syn := SyntheticStatSource.new()
+		if not arch.is_empty():
+			syn.set_arch(arch)
+		use(syn)
+		return
+	_use_helper()
+
+
+func no_signal() -> bool:
+	return not status.is_empty()
+
+
+func _use_helper() -> void:
+	_retry_timer = null
 	var helper := HelperStatSource.new()
-	helper.failed.connect(_on_helper_failed)
+	helper.failed.connect(_on_helper_failed.bind(helper))
 	use(helper)
 
 
-func _on_helper_failed(reason: String) -> void:
-	status = reason
-	print("Stats: helper failed (%s); falling back to synthetic" % reason)
-	if source is HelperStatSource:
-		use(SyntheticStatSource.new())
+## Never a fallback to synthetic: the last sample stays, marked as no
+## signal, and a fresh helper is tried with backoff. A helper that was
+## missing is found once helper/build.sh has run.
+func _on_helper_failed(reason: String, helper: HelperStatSource) -> void:
+	if helper != source:
+		return  # an old one, already replaced
+	if live and Time.get_ticks_msec() - _live_ms >= RETRY_MAX * 1000.0:
+		_retry = 1.0
+	_set_live(false, reason)
+	if _retry_timer:
+		return
+	print("Stats: %s; retrying in %d s" % [reason, _retry])
+	# start() can fail inside use(), so the retry is never synchronous.
+	_retry_timer = get_tree().create_timer(_retry)
+	_retry_timer.timeout.connect(_use_helper)
+	_retry = minf(_retry * 2.0, RETRY_MAX)
+
+
+func _set_live(on: bool, why: String) -> void:
+	if on == live and why == status:
+		return
+	live = on
+	status = why
+	status_changed.emit()
 
 
 func use(next: StatSource) -> void:
+	if _retry_timer:
+		_retry_timer.timeout.disconnect(_use_helper)  # superseded
+		_retry_timer = null
 	if source:
-		source.stop()
-		source.queue_free()
+		source.retire()
 	source = next
+	# A retry keeps the reason on screen until the new helper speaks.
+	_set_live(false, status)
 	add_child(source)
 	source.sample.connect(_on_sample)
-	source.start()
 	source_changed.emit(source.source_name())
+	source.start()
 
 
 func _on_sample(s: StatSample) -> void:
 	raw = s
+	if not live:
+		_live_ms = Time.get_ticks_msec()
+		_set_live(true, "")
 	if not _has_raw:
 		_has_raw = true
 		settle()
