@@ -27,9 +27,38 @@ const READOUTS_MAX := 24
 const DOCKED_SLICES_MAX := 32
 var _drift := 0.0
 
+## The parts that keep their shape (backing, guide rings, the two dashed
+## rings, the scale ring and its ticks) are drawn once, in white, on
+## layers behind this node, and a frame only tints and turns them. Drawn
+## afresh they were ~150 antialiased strokes a frame and a third of the
+## docked sigil's CPU (2026-09-30). White times the tint is the tint, so
+## the picture is the one the strokes made.
+class Layer extends Node2D:
+	var paint: Callable
+
+	func _init(p: Callable) -> void:
+		paint = p
+		show_behind_parent = true  # under the arcs, in child order, as drawn before
+
+	func _draw() -> void:
+		paint.call(self)
+
+var _backing_layer := Layer.new(_paint_backing)
+var _guide_layer := Layer.new(_paint_guides)
+var _dash_outer := Layer.new(_paint_dashes.bind(0))
+var _dash_inner := Layer.new(_paint_dashes.bind(1))
+var _scale_layer := Layer.new(_paint_scale)
+## What the layers' strokes depend on; they are redrawn when it changes.
+var _layer_key := []
+## The inner guide is lit and breathing (drawn here, with its halo) when
+## the inner ring has no cores; the guide layer then holds only the outer.
+var _inner_lit := false
+
 
 func _init() -> void:
 	dim_without_signal = false
+	for l in [_backing_layer, _guide_layer, _dash_outer, _dash_inner, _scale_layer]:
+		add_child(l)
 
 
 func _process(dt: float) -> void:
@@ -38,7 +67,6 @@ func _process(dt: float) -> void:
 
 
 func _draw() -> void:
-	draw_backing()
 	var s: StatSample = Stats.smooth
 	var frame := Palette.color("frame")
 	var light := Palette.color("light")
@@ -47,14 +75,16 @@ func _draw() -> void:
 
 	# Guide rings: the track the arcs run on. At idle this is the geometry.
 	var guide := Palette.dim(frame, 0.18 + 0.22 * breath)
-	draw_arc(Vector2.ZERO, outer_radius, 0.0, TAU, 160, guide, Palette.hair, true)
 	var n := s.cpu_cores.size()
 	var inner := clampi(s.cpu_inner_cores, 0, n)
 	# No signal: the geometry alone, a hollow core and the words, so
 	# frozen or missing readings never pass for the machine's. This glyph
 	# says it because docked it is the only thing on screen.
 	var lost := Stats.no_signal()
-	if n > 0 and inner == 0 and not lost:
+	_inner_lit = n > 0 and inner == 0 and not lost
+	var swell := smoothstep(0.0, 1.0, breath)
+	_tint_layers(guide, Palette.dim(frame, 0.12 + 0.1 * breath), Palette.dim(frame.lerp(light, 0.6 * swell), lerpf(0.04, 1.0, swell)))
+	if _inner_lit:
 		# Nothing for the inner ring (one cluster, no SMT, no E-cores): its
 		# track is lit and breathes instead of lying dark, so it reads as
 		# part of the machine rather than a missing half. Apple Silicon
@@ -62,17 +92,6 @@ func _draw() -> void:
 		var lit := frame.lerp(light, 0.35 + 0.25 * breath)
 		halo_arc(Vector2.ZERO, inner_radius, 0.0, TAU, 160, lit, Palette.hair, 0.15 + 0.2 * breath)
 		draw_arc(Vector2.ZERO, inner_radius, 0.0, TAU, 160, Palette.emit(Palette.dim(lit, 0.45 + 0.35 * breath), 0.2 * breath), Palette.hair, true)
-	else:
-		draw_arc(Vector2.ZERO, inner_radius, 0.0, TAU, 160, guide, Palette.hair, true)
-	_draw_dashed_ring((outer_radius + inner_radius) * 0.5, 48, Palette.dim(frame, 0.12 + 0.1 * breath), _drift)
-	_draw_dashed_ring(inner_radius - 30.0, 24, Palette.dim(frame, 0.12 + 0.1 * breath), -_drift * 1.5)
-	# The scale ring breathes. Dark at the bottom of the breath; at the top,
-	# in light rather than frame color and fully opaque, about twice as
-	# bright as the old heartbeat's peak. One rise and fall per breath
-	# period (10 s in Yggdrasil). Replaced the per-sample heartbeat on
-	# 2026-09-10 at Josh's request: a beat is discrete, a breath flows.
-	var swell := smoothstep(0.0, 1.0, breath)
-	_draw_scale_ring(outer_radius + 26.0, Palette.dim(frame.lerp(light, 0.6 * swell), lerpf(0.04, 1.0, swell)))
 
 	if lost:
 		_draw_no_signal(frame, breath)
@@ -180,21 +199,64 @@ func _runs(vals: PackedFloat32Array, most: int) -> PackedFloat32Array:
 	return out
 
 
-## Ticks every 5 degrees, longer every 15, a hairline circle to hang them on.
-func _draw_scale_ring(radius: float, color: Color) -> void:
-	draw_arc(Vector2.ZERO, radius, 0.0, TAU, 180, Palette.dim(color, color.a * 0.5), Palette.hair, true)
+## The layers' colors and turn for this frame; their strokes only when
+## the geometry under them changed (docking changes the hair, a palette
+## or mode change the backing).
+func _tint_layers(guide: Color, dash: Color, scale_color: Color) -> void:
+	var key := [size, outer_radius, inner_radius, Palette.hair, _inner_lit]
+	if key != _layer_key:
+		_layer_key = key
+		for l in get_children():
+			if l is Layer:
+				l.queue_redraw()
+	_backing_layer.visible = Palette.backing_alpha > 0.0
+	_backing_layer.modulate = Palette.dim(Palette.color("ground"), Palette.backing_alpha)
+	_guide_layer.modulate = guide
+	_dash_outer.modulate = dash
+	_dash_outer.rotation = _drift
+	_dash_inner.modulate = dash
+	_dash_inner.rotation = -_drift * 1.5
+	# The scale ring breathes. Dark at the bottom of the breath; at the top,
+	# in light rather than frame color and fully opaque, about twice as
+	# bright as the old heartbeat's peak. One rise and fall per breath
+	# period (10 s in Yggdrasil). Replaced the per-sample heartbeat on
+	# 2026-09-10 at Josh's request: a beat is discrete, a breath flows.
+	_scale_layer.modulate = scale_color
+
+
+## Smoked glass under the panel, only in desktop mode with a backing level set.
+func _paint_backing(l: CanvasItem) -> void:
+	l.draw_rect(Rect2(-half(), size), Color.WHITE, true)
+
+
+## The tracks the arcs run on. At idle this is the geometry.
+func _paint_guides(l: CanvasItem) -> void:
+	l.draw_arc(Vector2.ZERO, outer_radius, 0.0, TAU, 160, Color.WHITE, Palette.hair, true)
+	if not _inner_lit:
+		l.draw_arc(Vector2.ZERO, inner_radius, 0.0, TAU, 160, Color.WHITE, Palette.hair, true)
+
+
+## Dashes between the rings (0) and inside the inner one (1); the layer's
+## rotation turns them.
+func _paint_dashes(l: CanvasItem, which: int) -> void:
+	var radius := (outer_radius + inner_radius) * 0.5 if which == 0 else inner_radius - 30.0
+	var dashes := 48 if which == 0 else 24
+	var step := TAU / dashes
+	for i in dashes:
+		var a := i * step
+		l.draw_arc(Vector2.ZERO, radius, a, a + step * 0.45, 6, Color.WHITE, Palette.hair, true)
+
+
+## Ticks every 5 degrees, longer every 15, on a hairline circle at half
+## their strength.
+func _paint_scale(l: CanvasItem) -> void:
+	var radius := outer_radius + 26.0
+	l.draw_arc(Vector2.ZERO, radius, 0.0, TAU, 180, Color(1.0, 1.0, 1.0, 0.5), Palette.hair, true)
 	for i in 72:
 		var a := i * TAU / 72.0
 		var d := Vector2.from_angle(a)
 		var len := 6.0 if i % 3 == 0 else 3.0
-		draw_line(d * radius, d * (radius + len), color, Palette.hair, true)
-
-
-func _draw_dashed_ring(radius: float, dashes: int, color: Color, offset: float = 0.0) -> void:
-	var step := TAU / dashes
-	for i in dashes:
-		var a := i * step + offset
-		draw_arc(Vector2.ZERO, radius, a, a + step * 0.45, 6, color, Palette.hair, true)
+		l.draw_line(d * radius, d * (radius + len), Color.WHITE, Palette.hair, true)
 
 
 ## Per-core readouts at each outer slice, outside the outer ring. Past
