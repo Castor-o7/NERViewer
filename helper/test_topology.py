@@ -34,7 +34,8 @@ class Machine:
 	"""A fake /sys. `cores` is a list of thread tuples (the SMT siblings of
 	each physical core); `l3` a list of CPU lists sharing a last-level
 	cache (omit for none); `rank`, `capacity` {cpu: value}; `hybrid`
-	(p_cpus, e_cpus) for Intel's cpu_core / cpu_atom."""
+	(p_cpus, e_cpus[, lpe_cpus]) for Intel's cpu_core / cpu_atom
+	[/ cpu_lowpower]."""
 
 	def __init__(self, root, cores, l3=None, rank=None, capacity=None, hybrid=None):
 		self.root = root
@@ -53,6 +54,8 @@ class Machine:
 		if hybrid:
 			self.write("devices/cpu_core/cpus", cpulist(hybrid[0]))
 			self.write("devices/cpu_atom/cpus", cpulist(hybrid[1]))
+			if len(hybrid) > 2:
+				self.write("devices/cpu_lowpower/cpus", cpulist(hybrid[2]))
 
 	def write(self, rel, text):
 		path = os.path.join(self.root, rel)
@@ -153,6 +156,19 @@ class Topology(unittest.TestCase):
 		self.assertEqual((perf, eff, inner, kind), (8, 4, 4, "eff"))
 		self.assertEqual(slots, e + p)
 
+	def test_intel_arrow_lake_h_lp_cores(self):
+		# Core Ultra 200H: 6 P (no HT), 8 E, and 2 LP-E cores under a third
+		# PMU, cpu_lowpower. All ten E-cores go inside.
+		p = [(k,) for k in range(6)]
+		e = [(6 + k,) for k in range(8)]
+		lpe = [(14,), (15,)]
+		m = Machine(self.root, p + e + lpe, l3=[list(range(14))],
+			hybrid=(list(range(6)), list(range(6, 14)), [14, 15]))
+		slots, perf, eff, inner, kind = self.order(m)
+		self.contract(slots, perf, eff, inner, kind)
+		self.assertEqual((perf, eff, inner, kind), (6, 10, 10, "eff"))
+		self.assertEqual(slots, e + lpe + p)
+
 	def test_arm_big_little(self):
 		# 4 little (capacity 446) + 4 big (1024), no L3 in sysfs.
 		cores = [(k,) for k in range(8)]
@@ -200,6 +216,23 @@ class Topology(unittest.TestCase):
 		self.contract(slots, perf, eff, inner, kind)
 		self.assertEqual((perf, eff, inner, kind), (64, 0, 4, "cluster"))
 		self.assertEqual(slots[:4], cores[36:40])
+
+	def test_vm_single_core_sockets(self):
+		# QEMU -smp 4 (sockets=4, cores=1): an L3 per vCPU is no cluster.
+		cores = [(k,) for k in range(4)]
+		m = Machine(self.root, cores, l3=[[k] for k in range(4)])
+		slots, perf, eff, inner, kind = self.order(m)
+		self.contract(slots, perf, eff, inner, kind)
+		self.assertEqual((perf, eff, inner, kind), (4, 0, 0, "none"))
+		self.assertEqual(slots, cores)
+
+	def test_vm_two_sockets_of_one_smt_core(self):
+		# sockets=2, threads=2: the SMT view, not a one-core "cluster".
+		cores = [(0, 1), (2, 3)]
+		m = Machine(self.root, cores, l3=[[0, 1], [2, 3]])
+		slots, perf, eff, inner, kind = self.order(m)
+		self.contract(slots, perf, eff, inner, kind)
+		self.assertEqual((perf, eff, inner, kind), (2, 0, 2, "smt"))
 
 	def test_partial_smt_reads_as_none(self):
 		# One sibling offlined: the rings would no longer pair up.

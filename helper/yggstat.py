@@ -60,10 +60,16 @@
 #   mem.total    Installed RAM: the online memory blocks under
 #                /sys/devices/system/memory, as hw.memsize counts it; the
 #                firmware's and kernel's reserve is neither used nor free,
-#                as there. MemTotal when the blocks are not readable.
+#                as there. Blocks above 128 MiB (bare-metal x86 from 64 GB
+#                uses 2 GiB) count the PCI hole and the top of RAM as whole
+#                blocks, so there the firmware map's System RAM, rounded up
+#                to a GiB, is used instead. MemTotal when neither is readable.
 #                [hw.memsize]
-#   mem.used     MemTotal - MemAvailable: what the kernel says it could not
-#                hand to a new program without swapping. [wire+active+compressed]
+#   mem.used     MemTotal - available: what the kernel says it could not
+#                hand to a new program without swapping. Available is
+#                MemAvailable plus the shrinkable ZFS ARC (size - c_min),
+#                which the kernel does not count though it gives it back,
+#                as htop and btop count it. [wire+active+compressed]
 #   mem.wired    Memory the kernel cannot page out: Unevictable (which already
 #                contains Mlocked, so Mlocked is not added twice) plus the
 #                kernel's own unreclaimable slab, stacks and page tables.
@@ -73,7 +79,7 @@
 #                [compressor_page_count]
 #   mem.free     MemFree: pages holding nothing at all, like macOS's free +
 #                speculative. Cache is neither used nor free here, as there.
-#   mem.pressure 1 - MemAvailable/MemTotal, the resting level, as the Mac's
+#   mem.pressure 1 - available/MemTotal, the resting level, as the Mac's
 #                is 1 - (free + pageable + purgeable)/total: a healthy machine
 #                rests around 0.2-0.5 on both. PSI raises it: /proc/pressure/
 #                memory "some avg10", the share of the last ten seconds in
@@ -84,23 +90,35 @@
 #   net          /proc/net/dev byte counters, per-interface deltas, summed
 #                over interfaces backed by hardware (/sys/class/net/X/device),
 #                so bridge, veth and tunnel traffic is not counted twice; if
-#                there are none, every interface but lo. [ifmib, all but lo0]
-#   thermal      The CPU package sensor (k10temp Tdie/Tctl, zenpower Tdie,
-#                coretemp Package id 0, else an x86_pkg_temp or cpu thermal
-#                zone), in tiers: 0 below 70 C, 1 from 70, 2 from 85, 3 from
-#                95 (or, when the sensor reports a crit, from crit-5, and 2
-#                from crit-15). An AMD package without a crit (k10temp,
-#                zenpower) runs up to its Tjmax under ordinary load by
-#                design, so there the tiers follow Tjmax (tj-10, tj, tj+5):
-#                serious means it has reached Tjmax and throttles, critical
-#                that it has gone past, as the Mac means them. Tjmax from
-#                /proc/cpuinfo: 90 C (Zen 1-3 desktop, the 5900X), 95 C
-#                (Zen 4 and later, family 0x19 model 0x60+ or 0x1a+), 100 C
-#                for a mobile part (U/H/HS/HX, Ryzen AI). Tdie before Tctl,
-#                since Tctl carries a +10/+20 C offset on Zen 1 X parts. A
-#                tier only drops once the temperature is 3 C below its
-#                threshold, so the frame does not flicker on a boundary. No
-#                sensor: 0. [ProcessInfo.thermalState]
+#                there are none, every interface but lo. Rates over
+#                CLOCK_MONOTONIC, so a wall-clock step (NTP, a VM restored)
+#                cannot spike them. [ifmib, all but lo0]
+#   thermal      The CPU package sensor (k10temp Tdie/Tctl, else its
+#                unlabelled temp1 on pre-Zen parts; zenpower Tdie; coretemp's
+#                hottest Package id N, else its hottest Core N on parts
+#                before Sandy Bridge; the Pi's cpu_thermal; else the hottest
+#                CPU thermal zone: x86_pkg_temp, cpu/soc/bigcore/littlecore/
+#                cpuss/cluster*-thermal on ARM SoCs; acpitz last), in tiers:
+#                0 below 70 C, 1 from 70, 2 from 85, 3 from 95 (or, when the
+#                sensor reports a crit, from crit-5, and 2 from crit-15; a
+#                zone's crit is its lowest critical trip point). A package
+#                that runs up to its Tjmax under ordinary load by design
+#                has its tiers follow Tjmax (tj-10, tj, tj+5): serious means
+#                it has reached Tjmax and throttles, critical that it has
+#                gone past (a part that clamps at Tjmax never gets there),
+#                as the Mac means them. Intel (coretemp, x86_pkg_temp): its
+#                crit is Tjmax, not a shutdown point; 100 C without one. AMD
+#                (k10temp, zenpower): pre-Zen k10temp's crit is its HTC
+#                limit, where it throttles, so it stands in for Tjmax. Else
+#                Tjmax from /proc/cpuinfo: 70 C before Zen (Tctl's relative
+#                scale), 90 C (Zen 1-3 desktop, the 5900X), 95 C (Zen 4 and
+#                later, family 0x19 model 0x60+ or 0x1a+; Threadripper and
+#                EPYC from family 0x19), 100 C for a mobile or handheld part
+#                (U/H/HS/HX, Ryzen AI, Ryzen Z, the Steam Deck's Custom APU).
+#                Tdie before Tctl, since Tctl carries a +10/+20 C offset on
+#                Zen 1 X parts. A tier only drops once the temperature is
+#                3 C below its threshold, so the frame does not flicker on a
+#                boundary. No sensor: 0. [ProcessInfo.thermalState]
 #   uptime       CLOCK_MONOTONIC: time awake since boot, suspend excluded,
 #                as the Mac's is (/proc/uptime would count the night the
 #                machine slept). [systemUptime]
@@ -112,6 +130,7 @@ import re
 import signal
 import sys
 import time
+import traceback
 
 # MARK: - Arguments
 
@@ -131,8 +150,10 @@ for _a in _args:
 
 
 def read(path):
+	# surrogateescape: an interface name need not be UTF-8, and one odd
+	# byte in /proc/net/dev must not fail every sample.
 	try:
-		with open(path) as f:
+		with open(path, errors="surrogateescape") as f:
 			return f.read()
 	except OSError:
 		return ""
@@ -248,9 +269,11 @@ def core_order(present=None):
 		seen.update(sib)
 		cores.append(tuple(sib))
 	# E-cores first, as on Apple Silicon: hybrid Intel names its own, ARM
-	# says it through capacity.
+	# says it through capacity. Arrow Lake-H puts its LP E-cores under a
+	# third PMU, cpu_lowpower; they are E-cores too.
 	p_cpus = parse_cpulist(read(SYSFS + "/devices/cpu_core/cpus"))
 	e_cpus = set(parse_cpulist(read(SYSFS + "/devices/cpu_atom/cpus")))
+	e_cpus |= set(parse_cpulist(read(SYSFS + "/devices/cpu_lowpower/cpus")))
 	if p_cpus and e_cpus:
 		e = [k for k in cores if k[0] in e_cpus]
 	else:
@@ -266,7 +289,9 @@ def core_order(present=None):
 		key = _cpu_sys(k[0], "cache/index3/shared_cpu_list").strip() or _cpu_sys(k[0], "topology/die_id").strip()
 		clusters.setdefault(key, []).append(k)
 	groups = list(clusters.values())
-	if len(groups) >= 2:
+	# A cluster of one core is no cluster: a VM of N single-core sockets
+	# gets an L3 per vCPU from QEMU, and would put cpu0 alone inside.
+	if len(groups) >= 2 and min(len(g) for g in groups) >= 2:
 		first = max(groups, key=lambda g: (max(_rank(c) for k in g for c in k), -g[0][0]))
 		rest = [k for k in cores if k not in first]
 		return first + rest, len(cores), 0, len(first), "cluster"
@@ -319,15 +344,30 @@ def meminfo():
 	return out
 
 
-ZRAM = glob.glob("/sys/block/zram*/mm_stat")
-
-
-def zram_bytes():
+def zram_bytes(sysfs="/sys"):
+	# Globbed per sample: a device set up after login counts too.
 	total = 0
-	for path in ZRAM:
+	for path in glob.glob(sysfs + "/block/zram*/mm_stat"):
 		f = read(path).split()
 		if len(f) >= 3:
 			total += int(f[2])  # mem_used_total: RAM the device occupies
+	return total
+
+
+SECTION = 128 << 20
+GIB = 1 << 30
+
+
+def firmware_ram(sysfs="/sys"):
+	"""System RAM in the firmware's memory map, in bytes; 0 without one."""
+	total = 0
+	for d in glob.glob(sysfs + "/firmware/memmap/*"):
+		if read(d + "/type").strip() != "System RAM":
+			continue
+		try:
+			total += int(read(d + "/end").strip(), 16) - int(read(d + "/start").strip(), 16) + 1
+		except ValueError:
+			pass
 	return total
 
 
@@ -338,10 +378,34 @@ def installed_ram(sysfs="/sys"):
 	except ValueError:
 		return 0
 	n = sum(1 for p in glob.glob(sysfs + "/devices/system/memory/memory*/online") if read(p).strip() == "1")
+	if block > SECTION:
+		# A block with any RAM in it is online whole: 2 GiB blocks count
+		# the PCI hole and the top of RAM in full, 66 GiB on a 64 GB box.
+		# The firmware's own map, summed and rounded up to a GiB, does not
+		# (reserved RAM is well under one). No map (not x86): the blocks,
+		# which elsewhere are aligned to the RAM they hold.
+		fw = firmware_ram(sysfs)
+		if fw:
+			return min(block * n, -(-fw // GIB) * GIB)
 	return block * n
 
 
 INSTALLED = installed_ram()
+
+
+def arc_reclaimable(path="/proc/spl/kstat/zfs/arcstats"):
+	"""Bytes of the ZFS ARC the kernel would give back (size - c_min); 0
+	without ZFS. The ARC sits outside the page cache, so MemAvailable leaves
+	it out, and a ZFS box would read half full at rest."""
+	stats = {}
+	for line in read(path).splitlines()[2:]:
+		f = line.split()
+		if len(f) == 3:
+			try:
+				stats[f[0]] = int(f[2])
+			except ValueError:
+				pass
+	return max(0, stats.get("size", 0) - max(stats.get("c_min", 0), 0))
 
 
 def mem_pressure(mem_total, avail, psi):
@@ -400,21 +464,68 @@ def net_rate(prev, cur, dt):
 
 # MARK: - Thermal
 
-## AMD package drivers: no crit, and Tjmax (amd_tjmax) is where the part sits at work.
+## AMD package drivers: Tjmax (amd_tjmax) is where the part sits at work; the
+## only crit is pre-Zen k10temp's HTC limit, which plays the same part.
 AMD_SENSORS = ("k10temp", "zenpower")
+## Intel package sensors: crit, when there is one, is Tjmax, where the part sits at work.
+INTEL_SENSORS = ("coretemp", "x86_pkg_temp")
+
+## CPU thermal zones by type, lower-cased with '-' as '_': x86 and the ARM
+## SoCs (RK3588 soc/bigcore0/littlecore, Qualcomm cpu0/cpuss0, Snapdragon X
+## cpu0_0_top, MediaTek cpu_little0, Jetson CPU-therm). Not gpu, not acpitz.
+CPU_ZONE = re.compile(r"(x86_pkg_temp|(cpu|soc|bigcore|littlecore|cpuss|cluster)\w*_therm)")
+
+
+def _millic(path):
+	"""A sysfs millidegree file in C, or None."""
+	raw = read(path).strip()
+	return int(raw) / 1000.0 if raw.isdigit() and int(raw) > 0 else None
+
+
+def _zone_crit(zone):
+	"""The zone's lowest critical trip point in C, or None. Below 60 C it
+	is a firmware placeholder (desktop acpitz zones report 20.8 C), not a
+	shutdown point, and would read critical at room temperature."""
+	crits = []
+	for tp in glob.glob(zone + "/trip_point_*_type"):
+		if read(tp).strip() == "critical":
+			c = _millic(tp[:-len("_type")] + "_temp")
+			if c and c >= 60.0:
+				crits.append(c)
+	return min(crits) if crits else None
+
+
+def _coretemp(hwmons):
+	"""coretemp's (inputs, crit): every package, over every socket's hwmon;
+	before Sandy Bridge there is no package sensor, so every core."""
+	labels = {lab: read(lab).strip() for hw in hwmons for lab in sorted(glob.glob(hw + "/temp*_label"))}
+	for prefix in ("Package id ", "Core "):
+		bases = [lab[:-len("_label")] for lab, text in labels.items() if text.startswith(prefix)]
+		bases = [b for b in bases if os.path.exists(b + "_input")]
+		if bases:
+			crits = [c for c in (_millic(b + "_crit") for b in bases) if c]
+			return [b + "_input" for b in bases], (max(crits) if crits else None)
+	return [], None
 
 
 def find_cpu_sensor(sysfs="/sys"):
-	"""(input path, crit in C or None, driver name) for the CPU package,
-	else (None, None, None)."""
+	"""([input paths], crit in C or None, driver name) for the CPU package,
+	read as the hottest of the paths; ([], None, None) without one."""
 	wanted = {
-		"k10temp": ("Tdie", "Tctl"),
+		# None: temp1 unlabelled, as k10temp is before Zen.
+		"k10temp": ("Tdie", "Tctl", None),
 		"zenpower": ("Tdie", "Tctl"),
-		"coretemp": ("Package id 0",),
 		"cpu_thermal": (None,),
 	}
-	for hw in sorted(glob.glob(sysfs + "/class/hwmon/hwmon*")):
-		name = read(hw + "/name").strip()
+	hwmons = sorted(glob.glob(sysfs + "/class/hwmon/hwmon*"))
+	names = {hw: read(hw + "/name").strip() for hw in hwmons}
+	for hw in hwmons:
+		name = names[hw]
+		if name == "coretemp":
+			inputs, crit = _coretemp([h for h in hwmons if names[h] == name])
+			if inputs:
+				return inputs, crit, name
+			continue
 		if name not in wanted:
 			continue
 		for label in wanted[name]:
@@ -423,20 +534,25 @@ def find_cpu_sensor(sysfs="/sys"):
 					continue
 				inp = lab[:-len("_label")] + "_input"
 				if os.path.exists(inp):
-					crit = read(lab[:-len("_label")] + "_crit").strip()
-					return inp, (int(crit) / 1000.0 if crit.isdigit() and int(crit) > 0 else None), name
-	for zone in sorted(glob.glob(sysfs + "/class/thermal/thermal_zone*")):
-		t = read(zone + "/type").strip().lower()
-		if t in ("x86_pkg_temp", "cpu-thermal", "cpu_thermal", "soc_thermal"):
-			return zone + "/temp", None, t
-	return None, None, None
+					return [inp], _millic(lab[:-len("_label")] + "_crit"), name
+	# No hwmon driver: the CPU thermal zones, all of them (an ARM SoC has
+	# one per cluster), else acpitz, coarse but better than a permanent 0.
+	zones = sorted(glob.glob(sysfs + "/class/thermal/thermal_zone*"))
+	types = {z: read(z + "/type").strip().lower() for z in zones}
+	for match in (lambda t: CPU_ZONE.match(t.replace("-", "_")), lambda t: t == "acpitz"):
+		hit = [z for z in zones if match(types[z])]
+		if hit:
+			crits = [c for c in (_zone_crit(z) for z in hit) if c]
+			return [z + "/temp" for z in hit], (min(crits) if crits else None), types[hit[0]]
+	return [], None, None
 
 
 def amd_tjmax(cpuinfo="/proc/cpuinfo"):
-	"""An AMD part's Tjmax in C, from its family, model and name: 90 for
-	Zen 1-3 desktop parts, 95 for Zen 4 and later, 100 for a mobile part
-	(most run 100-105). A rough table, but tiers only need the right side
-	of normal; anything unreadable counts as 90."""
+	"""An AMD part's Tjmax in C, from its family, model and name: 70 before
+	Zen (Tctl there is a relative scale topping out at 70), 90 for Zen 1-3
+	desktop parts, 95 for Zen 4 and later, 100 for a mobile or handheld
+	part (most run 100-105). A rough table, but tiers only need the right
+	side of normal; anything unreadable counts as 90."""
 	fam = mod = -1
 	name = ""
 	for line in read(cpuinfo).splitlines():
@@ -450,20 +566,29 @@ def amd_tjmax(cpuinfo="/proc/cpuinfo"):
 			name = v
 		elif not line.strip() and fam >= 0:
 			break               # the first processor says it for all
-	if re.search(r"\b\d{4}(U|H|HS|HX)\b|Ryzen AI", name):
-		return 100.0
+	if 0 <= fam < 0x17:
+		return 70.0             # Phenom, FX, A-series: when k10temp has no HTC crit
+	if re.search(r"\b\d{4}(U|H|HS|HX)\b|Ryzen AI|Ryzen Z\d|Custom APU", name):
+		return 100.0            # the handhelds too: Steam Deck, ROG Ally, Legion Go
 	if fam >= 0x1a or (fam == 0x19 and mod >= 0x60):
 		return 95.0
+	if fam == 0x19 and mod >= 0x10 and re.search(r"Threadripper|EPYC", name):
+		return 95.0             # Zen 4 HEDT and server sit below model 0x60;
+		                        # Zen 3's (Milan 0x01, 5000WX 0x08) stay at 90
 	return 90.0
 
 
 def thresholds(crit, name, tj=90.0):
 	"""The temperatures tiers 1, 2 and 3 start at."""
-	if crit:
+	if name in INTEL_SENSORS:
+		tj = crit or 100.0      # Tjmax, where a boosting Intel part sits by design
+	elif name in AMD_SENSORS:
+		tj = crit or tj         # pre-Zen k10temp's crit is HTC, where it throttles
+	elif crit:
 		return (min(70.0, crit - 25.0), crit - 15.0, crit - 5.0)
-	if name in AMD_SENSORS:
-		return (tj - 10.0, tj, tj + 5.0)
-	return (70.0, 85.0, 95.0)
+	else:
+		return (70.0, 85.0, 95.0)
+	return (tj - 10.0, tj, tj + 5.0)
 
 
 SENSOR, CRIT, SENSOR_NAME = find_cpu_sensor()
@@ -476,10 +601,11 @@ def thermal():
 	global _tier
 	if not SENSOR:
 		return 0
-	raw = read(SENSOR).strip()
-	if not raw.lstrip("-").isdigit():
+	raws = [read(p).strip() for p in SENSOR]
+	temps = [int(r) for r in raws if r.lstrip("-").isdigit()]
+	if not temps:
 		return _tier
-	c = int(raw) / 1000.0
+	c = max(temps) / 1000.0
 	up = sum(1 for th in THRESHOLDS if c >= th)
 	down = sum(1 for th in THRESHOLDS if c >= th - HYSTERESIS)
 	# Rise at once; fall only past the hysteresis band.
@@ -500,13 +626,14 @@ def fmt(v, places=3):
 
 prev_ticks = cpu_ticks()
 prev_net = net_bytes()
-prev_time = time.time()
+prev_mono = time.monotonic()  # the rates' clock: the wall clock can step
 
 
 def sample():
-	global prev_ticks, prev_net, prev_time, ORDER, PERF, EFF, INNER, KIND
-	now = time.time()
-	dt = max(now - prev_time, 0.001)
+	global prev_ticks, prev_net, prev_mono, ORDER, PERF, EFF, INNER, KIND
+	now = time.time()  # the "t" field only
+	mono = time.monotonic()
+	dt = max(mono - prev_mono, 0.001)
 
 	ticks = cpu_ticks()
 	if set(ticks) != set(prev_ticks):
@@ -525,7 +652,7 @@ def sample():
 
 	m = meminfo()
 	mem_total = m.get("MemTotal", 0)
-	avail = m.get("MemAvailable", m.get("MemFree", 0))
+	avail = min(mem_total, m.get("MemAvailable", m.get("MemFree", 0)) + arc_reclaimable())
 	used = max(0, mem_total - avail)
 	installed = max(INSTALLED, mem_total)
 	wired = (m.get("Unevictable", 0) + m.get("SUnreclaim", 0)
@@ -538,7 +665,7 @@ def sample():
 	net = net_bytes()
 	rx_bps, tx_bps = net_rate(prev_net, net, dt)
 	prev_net = net
-	prev_time = now
+	prev_mono = mono
 
 	uptime = time.clock_gettime(time.CLOCK_MONOTONIC)
 
@@ -565,12 +692,33 @@ def main():
 	time.sleep(min(interval_ms, 250) / 1000.0)
 
 	next_at = time.monotonic()
+	fails = printed = 0
 	while True:
+		# A bad reading skips one tick; it must not end the helper, which
+		# the game would then replace with synthetic numbers for good.
 		try:
-			sys.stdout.write(sample() + "\n")
-			sys.stdout.flush()
-		except (BrokenPipeError, ValueError):
-			os._exit(0)
+			line = sample()
+		except Exception:
+			# Nobody reads stderr until the helper exits, so a full pipe
+			# would block it here: three tracebacks, then a line now and
+			# then, then silence. Well under 64 KiB, and the last line
+			# still names the error.
+			fails += 1
+			if fails <= 3:
+				traceback.print_exc(file=sys.stderr)
+			elif fails % 600 == 0 and printed < 20:
+				printed += 1
+				e = sys.exc_info()[1]
+				print("yggstat: %d samples failed, last %s: %s" % (fails, type(e).__name__, e), file=sys.stderr, flush=True)
+			line = None
+		if line is not None:
+			try:
+				sys.stdout.write(line + "\n")
+				sys.stdout.flush()
+			except (BrokenPipeError, ValueError):
+				os._exit(0)  # stdout closed: the reader is gone
+		if once and line is None:
+			sys.exit(1)  # the smoke test must see it
 		# Orphaned: reparented to init or to a subreaper (systemd --user).
 		if once or os.getppid() != parent:
 			break
