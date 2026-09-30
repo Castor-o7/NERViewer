@@ -297,7 +297,7 @@ func _poll_dock() -> void:
 			return
 	_dock_text = text
 	if text.is_empty():
-		set_docked(false, Rect2i())
+		set_docked(false, Rect2i(), "cockpit released the dock")
 		return
 	var cfg := ConfigFile.new()
 	if cfg.parse(text) != OK:
@@ -310,7 +310,7 @@ func _poll_dock() -> void:
 	_dock_program = str(cfg.get_value("dock", "program", ""))
 	if pid > 0 and not _pid_alive(pid, _dock_program):
 		# The cockpit died without cleaning up; the file is stale.
-		set_docked(false, Rect2i())
+		set_docked(false, Rect2i(), "cockpit %d is gone" % pid)
 		return
 	if rect is Rect2i and rect.size.x > 0 and rect.size.y > 0:
 		print("docked to ", rect)
@@ -375,7 +375,9 @@ static func _ps_alive(pid: int, program: String) -> bool:
 	return alive
 
 
-func set_docked(on: bool, rect: Rect2i) -> void:
+## `why` goes to the log beside the undock, as `docked to` does for the
+## dock, so the journal can time one against the cockpit's end.
+func set_docked(on: bool, rect: Rect2i, why := "") -> void:
 	var win := get_window()
 	if on:
 		docked = true
@@ -408,6 +410,7 @@ func set_docked(on: bool, rect: Rect2i) -> void:
 		return
 	if not docked:
 		return
+	print("undocked: ", why if why else "asked")
 	docked = false
 	Palette.lift = false
 	Palette.hair = 1.0
