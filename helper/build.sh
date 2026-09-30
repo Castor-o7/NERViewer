@@ -7,9 +7,35 @@ cd "$(dirname "$0")"
 mkdir -p ../game/bin
 case "$(uname)" in
   Darwin)
-    swiftc -O -o ../game/bin/yggstat main.swift
+    # Universal, with the app's own floors, so an Intel Mac or an older
+    # macOS runs the helper too. Keep in step with export_presets.cfg.
+    floor() {
+      v=$(sed -n "s/^application\/min_macos_version_$1=\"\(.*\)\"/\1/p" ../game/export_presets.cfg | head -n 1)
+      echo "${v:-$2}"
+    }
+    T=$(mktemp -d)
+    trap 'rm -rf "$T"' EXIT
+    for a in arm64 x86_64; do
+      if [ "$a" = arm64 ]; then v=$(floor arm64 13.0); else v=$(floor x86_64 11.0); fi
+      swiftc -O -target "$a-apple-macos$v" -o "$T/$a" main.swift \
+        || { rm -f "$T/$a"; echo "yggstat: WARNING $a slice did not build" >&2; }
+    done
+    host=$(uname -m)
+    if [ -f "$T/arm64" ] && [ -f "$T/x86_64" ]; then
+      lipo -create -output ../game/bin/yggstat "$T/arm64" "$T/x86_64"
+      lipo ../game/bin/yggstat -verify_arch arm64 x86_64
+    elif [ -f "$T/$host" ]; then
+      # One slice would not build (an SDK without it, say): the host's alone
+      # beats nothing, but the app will not run the helper on the other.
+      echo "yggstat: WARNING not universal; $host only" >&2
+      cp "$T/$host" ../game/bin/yggstat
+    else
+      echo "yggstat: swiftc failed" >&2; exit 1
+    fi
     ;;
   Linux)
+    # The helper is a python3 script and the smoke test below needs it too.
+    command -v python3 >/dev/null 2>&1 || { echo "yggstat: python3 not found; the Linux helper needs it" >&2; exit 1; }
     cp yggstat.py ../game/bin/yggstat
     chmod +x ../game/bin/yggstat
     ;;

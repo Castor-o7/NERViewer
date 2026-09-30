@@ -11,18 +11,42 @@ you always dreamed of! Aaaahahahaha!!! You can't see me right now but I'm laughi
     tools/launch_agent.sh install # start at login (remove to undo)
 
 Needs the Xcode command line tools (swiftc, codesign) and the Godot 4.7.2
-export templates.
+export templates. Godot is `GODOT=` if set, else `godot` or `godot4` on
+PATH, else `/Applications/Godot.app`. Re-running install restarts it.
 
-### Linux (KDE Plasma)
+### Linux
 
-    tools/build_app.sh            # dist/linux/NERViewer.x86_64 + NERViewer.pck + yggstat
-    tools/launch_agent.sh install # systemd user unit edu.pdx.josh.nerviewer.service, started now
+    tools/build_app.sh            # dist/linux/NERViewer.<arch> + NERViewer.pck + yggstat
+    tools/launch_agent.sh install # start at login, and now (remove to undo)
 
 Needs python3 (the stat helper, `helper/yggstat.py`, is a script: no
-compiler) and the Godot 4.7.2 Linux export templates
-(`~/.local/share/godot/export_templates/4.7.2.stable/linux_release.x86_64`).
-The unit is part of `graphical-session.target`, so it starts and stops
-with the desktop; `tools/launch_agent.sh remove` disables and deletes it.
+compiler) and the Godot 4.7.2 Linux export templates for the machine:
+`NERViewer.x86_64` from `linux_release.x86_64`, or on an ARM box (a Pi 5,
+Asahi) `NERViewer.arm64` from `linux_release.arm64`.
+`NERVIEWER_ARCH=arm64` (or `x86_64`) cross-exports for the other into
+`dist/linux-arm64/` (or `dist/linux-x86_64/`), leaving this machine's
+`dist/linux/` alone. Godot is `GODOT=/path/to/godot` if set, else `godot`
+or `godot4` on PATH, else the Flathub `org.godotengine.Godot`. The
+templates go where that Godot reads them, in `4.7.2.stable/` (or
+`4.7.2.stable.mono/` for a .NET editor): `~/.local/share/godot/export_templates/`,
+the Flatpak's `~/.var/app/org.godotengine.Godot/data/godot/export_templates/`,
+or `editor_data/export_templates/` beside a self-contained (`_sc_`) editor.
+
+Login start is an XDG autostart entry,
+`~/.config/autostart/edu.pdx.josh.nerviewer.desktop`, which KDE, GNOME,
+XFCE, MATE, Cinnamon and LXQt all run. Where the systemd user manager can
+reach the display (Plasma and GNOME import it at every login), install
+also writes the user unit `edu.pdx.josh.nerviewer.service`; the entry
+starts NERViewer through it, the cockpit's `systemctl --user start` finds
+the same copy, and it stops with the desktop. Without systemd, or with a
+manager that has no DISPLAY, there is no unit: the entry runs the export
+itself and the cockpit launches it directly (on x86_64 only, for now:
+the cockpit looks for `NERViewer.x86_64`, so an arm64 box needs the
+unit until it learns the other name). i3, sway and other bare
+window managers skip XDG autostart; add
+`exec /path/to/NERViewer/tools/launch_agent.sh start` to their config.
+Re-running install after a rebuild restarts it on the new build;
+`tools/launch_agent.sh remove` deletes the entry and the unit.
 The window runs through XWayland (the X11 display driver), which is what
 lets it stay on top and sit exactly where the cockpit docks it.
 
